@@ -97,7 +97,7 @@ type QfRequest struct {
 }
 
 // 创建一个用于模型类请求的 Request
-func newModelRequest(method string, url string, body RequestBody) (*QfRequest, error) {
+func NewModelRequest(method string, url string, body RequestBody) (*QfRequest, error) {
 	return newRequest(modelRequest, method, url, body)
 }
 
@@ -107,7 +107,7 @@ func newAuthRequest(method string, url string, body RequestBody) (*QfRequest, er
 }
 
 // 创建一个用于管控类请求的 Request
-func newConsoleRequest(method string, url string, body RequestBody) (*QfRequest, error) {
+func NewConsoleRequest(method string, url string, body RequestBody) (*QfRequest, error) {
 	return newRequest(consoleRequest, method, url, body)
 }
 
@@ -125,13 +125,27 @@ func newRequest(requestType string, method string, url string, body RequestBody)
 }
 
 // 创建一个 Request，body 是一个 map
-func newRequestFromMap(requestType string, method string, url string, body map[string]interface{}) (*QfRequest, error) {
+func newRequestFromMap(requestType string, method string, urlStr string, body map[string]interface{}) (*QfRequest, error) {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// 提取params
+	params := u.Query()
+	paramsMap := make(map[string]string)
+	for key, values := range params {
+		if len(values) > 0 {
+			paramsMap[key] = values[0] // 只取第一个值
+		}
+	}
+
 	return &QfRequest{
 		Type:    requestType,
 		Method:  method,
-		URL:     url,
+		URL:     u.Path,
 		Body:    body,
-		Params:  map[string]string{},
+		Params:  paramsMap,
 		Headers: map[string]string{},
 	}, nil
 }
@@ -185,8 +199,11 @@ func (r *Requestor) addAuthInfo(ctx context.Context, request *QfRequest) error {
 		return r.addAccessToken(ctx, request)
 	} else if GetConfig().AccessKey != "" && GetConfig().SecretKey != "" {
 		return r.sign(request)
+	} else if GetConfig().AccessToken != "" {
+		request.Params["access_token"] = GetConfig().AccessToken
+		return nil
 	}
-	logger.Error("no enough credential found. Please check whether (ak, sk) or (access_key, secret_key) is set in config")
+	logger.Error("no enough credential found. Please check whether (ak, sk) or (access_key, secret_key) or (access_token) is set in config")
 	return &CredentialNotFoundError{}
 }
 
@@ -413,6 +430,9 @@ func (si *streamInternal) recv(resp QfResponse) error {
 				// field []byte = line
 				value []byte
 			)
+			if i := bytes.Index(line, []byte("event")); i != -1 {
+				continue
+			}
 			if i := bytes.IndexRune(line, ':'); i != -1 {
 				// field = line[:i]
 				value = line[i+1:]

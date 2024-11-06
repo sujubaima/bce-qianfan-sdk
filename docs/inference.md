@@ -1,11 +1,13 @@
 # 大模型推理
 
 + [Chat 对话](#chat-对话)
+  + [统计信息](#统计信息)
 + [Completion 续写](#completion-续写)
 + [Embedding 向量化](#embedding-向量化)
 + [Plugin 插件调用](#plugin-插件)
 + [文生图](#文生图)
 + [批量推理](#批量推理)
++ [类OpenAI入口](#类OpenAI入口)
 
 ### OpenAI迁移
 如果您已经使用了OpenAI SDK 或集成了 OpenAI API，那么您可以直接使用千帆Python SDK提供的OpenAI适配器，以快速接入千帆大模型平台：
@@ -14,7 +16,7 @@
 
 #### **Chat 对话**
 
-用户只需要提供预期使用的模型名称和对话内容，即可调用千帆大模型平台支持的，包括 ERNIE-Bot 在内的所有预置模型，如下所示：
+用户只需要提供预期使用的模型名称和对话内容，即可调用千帆大模型平台支持的，包括 ERNIE系列 在内的所有预置模型，如下所示：
 
 ```python
 import qianfan
@@ -22,7 +24,7 @@ import qianfan
 # 指定特定模型
 # 模型名称可以通过 qianfan.ChatCompletion.models() 获取
 # 也可以在命令行运行 qianfan chat --list-model 查看
-# 如果不设置 model，则使用默认模型 ERNIE-Bot-turbo
+# 如果不设置 model，则使用默认模型
 chat_comp = qianfan.ChatCompletion(model="ERNIE-Speed-8K")
 
 # 对于自行发布的模型，或者是不在预置模型列表中的模型，用户可以通过指定 endpoint 调用
@@ -127,10 +129,12 @@ async for r in resp:
 - `body`：API 返回的结果。可以通过 `[]` 简化调用直接获取 body 字段，例如 `resp.body['result']` 与 `resp['result']` 等价。
 - `code`：返回的 HTTP 状态码。
 - `headers`：返回的 HTTP 头。
-- `statistic`：请求相关的统计信息，包含如下字段
+- `statistic`：请求相关的统计信息，包含如下字段, 仅 `show_total_latency=True` 时有效
   - `request_latency`：请求延迟，单位为秒
   - `first_token_latency`：第一个 token 的延迟，单位为秒
   - `total_latency`：总调用延迟，包含了请求、序列化、限流等耗时，单位为秒
+  - `start_timestamp`： 请求开始时间戳，单位为毫秒
+  - `avg_output_tokens_per_second`： 平均每秒输出 token 数
 - `request`：请求的原始信息，包含如下字段
   - `method`：请求方法
   - `url`：请求的 URL
@@ -139,14 +143,69 @@ async for r in resp:
   - `json_body`：请求体
   - `retry_config`：请求使用的重试信息
 
-##### V2 版本
 
-千帆平台推出了 V2 版本的推理 API，SDK 也支持对 V2 版本的 API 进行调用，只需要创建对象时传入 `version="2"` 即可，其余使用方法与上述一致，差异点主要在于字段名称，具体字段名请参考 API 文档
+##### 统计信息
+> [!IMPORTANT] 
+>
+> 为了不影响请求的性能并获取准确的延迟信息，我们默认会关闭statistic统计功能，如果需要开启统计功能，请在创建对象时设置`show_total_latency`：
+> ```python
+> qianfan.ChatCompletion().do(messages=[{"role":"user", "content":"hi"}], show_total_latency=True)
+> ```
+> 在开启 show_total_latency 时，SDK 会在每次请求时启动一个单独的后台线程进行输出的预读取。在极端场景下可能会因无法创建线程而异常抛出。
+>
+> 对于这种情况，用户在使用时，可以在创建请求对象时设置 `sync_reading_thread_count=最大线程数` 来避免此问题：
+> ```python
+> qianfan.ChatCompletion(sync_reading_thread_count=500).do(messages=[{"role":"user", "content":"hi"}], show_total_latency=True)
+> ```
+
+以下是一个获取流式请求包间延迟的例子：
+```python
+from qianfan import ChatCompletion
+
+chat = ChatCompletion()
+
+resp = chat.do(messages=[{"role": "user", "content": "你好"}], stream=True, show_total_latency=True)
+for r in resp:
+    print(r['statistic']['request_latency'])
+```
+
+
+#### V2 版本
+
+千帆平台推出了 V2 版本的推理 API，SDK 也支持对 V2 版本的 API 进行调用：
+
+##### V2 鉴权
+
+API v2 采用Bearer Token的鉴权方式：可以通过access_key 和 secret_key 获取。因此可以选择以下两种方式设置鉴权信息：
+```python
+import os
+# 安全认证
+os.environ['QIANFAN_ACCESS_KEY'] = 'your_access_key'
+os.environ['QIANFAN_SECRET_KEY'] = 'your_secret_key'
+# 或 bearer token
+os.environ['QIANFAN_BEARER_TOKEN'] = 'your_bearer_token'
+```
+
+我们可以运行以下接口获取BEARER_TOKEN（可用于需要临时鉴权，或进行应用分发的场景）：
+
+```python
+import os
+os.environ['QIANFAN_ACCESS_KEY'] = 'your_access_key'
+os.environ['QIANFAN_SECRET_KEY'] = 'your_secret_key'
+
+resp = IAM.create_bearer_token(100)
+print(resp.body)
+token = resp.body["token"]
+```
+
+##### V2 示例:
+
+只需要创建对象时传入 `version="2"` 即可，其余使用方法与上述一致，差异点主要在于字段名称，具体字段名请参考 API 文档
 
 ```python
 # 在创建时传入 version 以使用 V2 版本
 # model 字段为可选，默认为 ernie-speed-8k，也可以指定其他模型，后续调用均会使用该模型
-chat = qianfan.ChatCompletion(version="2", model="ernie-speed-8k")
+chat = qianfan.ChatCompletion(version="2", app_id='app-xxx', model="ernie-speed-8k")
 
 # 调用方式与 V1 版本一致，具体字段名参考 API 文档
 resp = chat.do(
@@ -177,7 +236,7 @@ import qianfan
 # 指定特定模型
 # 模型名称可以通过 qianfan.Completion.models() 获取
 # 也可以在命令行运行 qianfan completion --list-model 查看
-# 如果不设置 model，则使用默认模型 ERNIE-Bot-turbo
+# 如果不设置 model，则使用默认模型 ERNIE-Lite-8K
 comp = qianfan.Completion(model="ERNIE-Speed-8K")
 
 # 对于自行发布的模型，或者是不在预置模型列表中的模型，用户可以通过指定 endpoint 调用
@@ -243,7 +302,7 @@ import qianfan
 # 模型名称可以通过 qianfan.Embedding.models() 获取
 # 也可以在命令行运行 qianfan embedding --list-model 查看
 # 如果不设置 model，则使用默认模型 Embedding-V1
-emb = qianfan.Embedding(model="ERNIE-Speed-8K")
+emb = qianfan.Embedding(model="embedding-v1")
 
 # 对于自行发布的模型，或者是不在预置模型列表中的模型，用户可以通过指定 endpoint 调用
 # endpoint 指模型 API 地址的最后一个 / 后的部分，例如 embedding-v1
@@ -501,3 +560,38 @@ for prompt, result in zip(prompt_list, results):
     if not isinstance(result, Exception):
         print(prompt, result)
 ```
+
+#### **类OpenAI入口**
+
+为了方便曾经使用过OpenAI SDK的用户快速接入，千帆SDK提供类OpenAI的入口，用户可以通过以下方式快速接入：
+
+> 当前仅支持Chat V2 SFT服务调用
+
+##### Chat 对话
+
+```python
+from qianfan import Qianfan
+import os
+
+# 为了适应不同环境下的API调用，可以自定义BASE_URL以及API_ROUTE：
+# os.environ["QIANFAN_CONSOLE_BASE_URL"] = 'https://qianfan.baidubce.com'
+# os.environ["QIANFAN_CHAT_V2_API_ROUTE"] = '/v2/chat/completions'
+
+client = Qianfan(
+    access_key='your_access_key',
+    secret_key='your_secret_key'
+    # api_key='', # 如果传入了access_key和secret_key，则不需要传入api_key
+    app_id='your_app_id'
+)
+
+
+comp = client.chat.completions.create(model='your_v2_api_name', messages=[{'role': 'user', 'content': '你好'}])
+print("comp", comp)
+```
+
+`app_id`可以通过以下[链接](https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application)获取(注意需要成新版获取v2 app_id)
+
+`model`可以通过以下方式获取:
+访问以下[链接](https://console.bce.baidu.com/qianfan/ais/console/onlineService?tab=service)切换成v2服务，点击详后获取:
+![pic](./imgs/v2_api_name.jpg)
+

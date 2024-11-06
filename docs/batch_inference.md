@@ -78,7 +78,7 @@ ChatCompletion().batch_do(body_list=task_list)
 ChatCompletion().abatch_do(body_list=task_list)
 ```
 
-2. 支持用户设置 `enable_reading_buffer=True` 以获取更为准确的延迟统计信息。此时，流式请求下单条请求返回的对象会由 `Iterator` / `AsyncIterator` 变为 `List`。如果用户需要批量统计不同请求的延迟，请设置该参数
+2. 支持用户设置 `show_total_latency=True` 以获取 `total_latency`
 
 ## 数据集评估
 
@@ -97,7 +97,7 @@ from qianfan.dataset import Dataset
 ds = Dataset.load(...)
 
 # 用户可以设置 service_model 为自己想要的模型名，来直接对数据进行批量推理，以 EB 4 为例
-result = ds.test_using_llm(service_model="ERNIE-Bot-4")
+result = ds.test_using_llm(service_model="ERNIE-4.0-8K")
 
 # 用户还可以设置 service_endpoint 来使用预置或自己的服务。
 result = ds.test_using_llm(service_endpoint="completions_pro")

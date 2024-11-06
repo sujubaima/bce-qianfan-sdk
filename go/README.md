@@ -62,11 +62,11 @@ qianfan.GetConfig().SK = "your_sk"
 可以使用 `ChatCompletion` 对象完成对话相关操作，可以通过如下方法获取一个 `ChatCompletion` 对象：
 
 ```go
-chat := qianfan.NewChatCompletion()  // 默认使用 ERNIE-Bot-turbo 模型
+chat := qianfan.NewChatCompletion()  // 使用默认模型
 
 // 可以通过 WithModel 指定模型
 chat := qianfan.NewChatCompletion(
-    qianfan.WithModel("ERNIE-Bot-4"),  // 支持的模型可以通过 chat.ModelList() 获取
+    qianfan.WithModel("ERNIE-4.0-8K"),  // 支持的模型可以通过 chat.ModelList() 获取
 )
 // 或者通过 WithEndpoint 指定 endpoint
 chat := qianfan.NewChatCompletion(
@@ -124,11 +124,11 @@ for {
 对于不需要对话，仅需要根据 prompt 进行补全的场景来说，用户可以使用 `Completion` 来完成这一任务。
 
 ```go
-completion := qianfan.NewCompletion()  // 默认使用 ERNIE-Bot-turbo 模型
+completion := qianfan.NewCompletion()  // 使用默认模型
 
 // 可以通过 WithModel 指定模型
 completion := qianfan.NewCompletion(
-    qianfan.WithModel("ERNIE-Bot-4"),  
+    qianfan.WithModel("ERNIE-4.0-8K"),  
     // 支持的模型可以通过 completion.ModelList() 获取
 )
 // 或者通过 WithEndpoint 指定 endpoint
@@ -185,7 +185,7 @@ embed := qianfan.NewEmbedding()  // 默认使用 Embedding-V1 模型
 
 // 可以通过 WithModel 指定模型
 embed := qianfan.NewEmbedding(
-    qianfan.WithModel("ERNIE-Bot-4"),  // 支持的模型可以通过 embed.ModelList() 获取
+    qianfan.WithModel("Embedding-V1"),  // 支持的模型可以通过 embed.ModelList() 获取
 )
 // 或者通过 WithEndpoint 指定 endpoint
 embed := qianfan.NewEmbedding(
@@ -262,4 +262,22 @@ chat := qianfan.NewChatCompletion(  // Completion 与 Embedding 可以用同样�
     WithLLMRetryTimeout(60),        // 超时 60s
     WithLLMRetryBackoffFactor(1),   // 指数回避因子
 )
+```
+
+同时，由于只有部分错误可以通过重试解决，SDK 只会对部分错误码进行重试，可以通过如下方式自定义修改
+
+```go
+qianfan.GetConfig().RetryErrCodes = []int{
+    // 以下是 SDK 默认重试的错误码
+    qianfan.ServiceUnavailableErrCode,  // 2
+    qianfan.ServerHighLoadErrCode,      // 336100
+    qianfan.QPSLimitReachedErrCode,     // 18
+    qianfan.RPMLimitReachedErrCode,     // 336501
+    qianfan.TPMLimitReachedErrCode,     // 336502
+    qianfan.AppNotExistErrCode,         // 15
+    // 以下为非内置错误码，仅为示例如何增加自定义错误码
+    qianfan.UnknownErrorErrCode,
+    // 也可以直接提供 int 类型的错误码
+    336000,
+}
 ```

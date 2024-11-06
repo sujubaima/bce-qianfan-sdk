@@ -52,6 +52,7 @@ from qianfan.dataset.data_source import (
     FileDataSource,
     QianfanDataSource,
 )
+from qianfan.dataset.data_source.afs import AFSDataSource
 from qianfan.dataset.data_source.utils import upload_data_from_bos_to_qianfan
 from qianfan.dataset.dataset_utils import (
     _async_batch_do_on_service,
@@ -269,6 +270,7 @@ class Dataset(Table):
         qianfan_dataset_create_args: Optional[Dict[str, Any]] = None,
         bos_load_args: Optional[Dict[str, Any]] = None,
         bos_source_args: Optional[Dict[str, Any]] = None,
+        afs_source_args: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional[DataSource]:
         """从参数来构建数据源"""
@@ -278,6 +280,7 @@ class Dataset(Table):
                 f" {kwargs}"
             )
             return FileDataSource(path=data_file, **kwargs)
+
         if qianfan_dataset_id:
             log_info(
                 "construct a qianfan data source from existed id:"
@@ -286,6 +289,7 @@ class Dataset(Table):
             return QianfanDataSource.get_existed_dataset(
                 dataset_id=qianfan_dataset_id, **kwargs
             )
+
         if qianfan_dataset_create_args:
             log_info(
                 "construct a new qianfan data source from args:"
@@ -310,6 +314,19 @@ class Dataset(Table):
                 )
                 log_error(err_msg)
                 raise ValueError(err_msg)
+
+            return bos_ds
+
+        if afs_source_args:
+            afs_ds = AFSDataSource(**afs_source_args)
+            if afs_ds.file_format is None:
+                err_msg = (
+                    f"failed to create afs dataset file path {afs_ds.afs_file_path}"
+                )
+                log_error(err_msg)
+                raise ValueError(err_msg)
+
+            return afs_ds
 
         log_info("no datasource was constructed")
         return None
@@ -341,6 +358,7 @@ class Dataset(Table):
         qianfan_dataset_id: Optional[str] = None,
         bos_load_args: Optional[Dict[str, Any]] = None,
         bos_source_args: Optional[Dict[str, Any]] = None,
+        afs_source_args: Optional[Dict[str, Any]] = None,
         huggingface_dataset: Optional[Any] = None,
         dataframe: Optional[Any] = None,
         schema: Optional[Schema] = None,
@@ -366,6 +384,9 @@ class Dataset(Table):
                 from args
             bos_source_args: (Optional[Dict[str, Any]]):
                 create arguments for creating a file on specific bos
+                default to None
+            afs_source_args: (Optional[Dict[str, Any]]):
+                create arguments for creating a file on specific afs
                 default to None
             huggingface_dataset (Optional[Any]):
                 Huggingface dataset object, only support
@@ -433,6 +454,7 @@ class Dataset(Table):
                 qianfan_dataset_id=qianfan_dataset_id,
                 bos_load_args=bos_load_args,
                 bos_source_args=bos_source_args,
+                afs_source_args=afs_source_args,
                 **kwargs,
             )
 
@@ -465,6 +487,7 @@ class Dataset(Table):
         qianfan_dataset_id: Optional[str] = None,
         qianfan_dataset_create_args: Optional[Dict[str, Any]] = None,
         bos_source_args: Optional[Dict[str, Any]] = None,
+        afs_source_args: Optional[Dict[str, Any]] = None,
         schema: Optional[Schema] = None,
         replace_source: Optional[bool] = None,
         **kwargs: Any,
@@ -489,6 +512,9 @@ class Dataset(Table):
             bos_source_args: (Optional[Dict[str, Any]]):
                 create arguments for creating a file on specific bos
                 default to None
+            afs_source_args: (Optional[Dict[str, Any]]):
+                create arguments for creating a file on specific afs
+                default to None
             schema: (Optional[Schema]):
                 schema used to validate before exporting data, default to None
             replace_source: (Optional[bool]):
@@ -506,6 +532,7 @@ class Dataset(Table):
                 qianfan_dataset_id=qianfan_dataset_id,
                 qianfan_dataset_create_args=qianfan_dataset_create_args,
                 bos_source_args=bos_source_args,
+                afs_source_args=afs_source_args,
                 **kwargs,
             )
 
@@ -1634,10 +1661,10 @@ class Dataset(Table):
             log_error(err_msg)
             raise ValueError(err_msg)
 
-        model_id = Model.detail(model_id)["result"]["modelIdStr"]
+        model_set_id = Model.detail(model_id)["result"]["modelIdStr"]
 
         result_dataset_id = _start_an_evaluation_task_for_model_batch_inference(
-            self.inner_data_source_cache, model_id, model_id
+            self.inner_data_source_cache, model_set_id, model_id
         )
 
         result_dataset = Dataset.load(
@@ -2168,6 +2195,7 @@ class Dataset(Table):
         runtime: str = "0s",
         model_type: str = "ChatCompletion",
         hyperparameters: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> None:
         """
         Start a load test task with current dataset.
@@ -2237,6 +2265,7 @@ class Dataset(Table):
                 first_latency_threshold=100,
                 round_latency_threshold=100,
                 success_rate_threshold=0,
+                **kwargs,
             )
             runner.run()
             if isinstance(urllib_env, str):
@@ -2264,6 +2293,7 @@ class Dataset(Table):
         first_latency_threshold: Optional[float] = 100,
         round_latency_threshold: Optional[float] = 1000,
         success_rate_threshold: Optional[float] = 0,
+        **kwargs: Any,
     ) -> None:
         """
         Start a load test task with current dataset.
@@ -2283,8 +2313,6 @@ class Dataset(Table):
                 e.g. (300s, 20m, 3h, 1h30m, etc.).
             spawn_rate (int):
                 Rate to spawn users at (users per second).
-            concurrent_round (int):
-                Number of rounds to run concurrently.
             model (str):
                 Name of the model service you want to test.
             endpoint (str):
@@ -2299,6 +2327,12 @@ class Dataset(Table):
                 Number of rounds to run concurrently.
             interval (int):
                 Interval concurrent number between rounds.
+            first_latency_threshold (float):
+                First latency threshold.
+            round_latency_threshold (float):
+                Round latency threshold.
+            success_rate_threshold (float):
+                Success rate threshold.
         """
         if origin_users < workers:
             workers = origin_users
@@ -2336,6 +2370,7 @@ class Dataset(Table):
                 first_latency_threshold=first_latency_threshold,
                 round_latency_threshold=round_latency_threshold,
                 success_rate_threshold=success_rate_threshold,
+                **kwargs,
             )
             runner.run()
             if isinstance(urllib_env, str):

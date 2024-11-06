@@ -2,8 +2,12 @@
 """
 流式请求 统计首token延迟时间（TTFT: time to first token）
 """
+import abc
+import json
+import re
 import time
-from typing import Any, Dict, Optional
+import traceback
+from typing import Any, Dict, Iterator, Literal, Optional
 
 from locust import constant, events, task
 from locust.clients import ResponseContextManager
@@ -36,7 +40,7 @@ def first_token_latency_request_handler(
     response_time: int,
     response_length: int,
     exception: Optional[Exception] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> None:
     """
     每个请求均会调用，用于向统计表注册数据
@@ -46,10 +50,9 @@ def first_token_latency_request_handler(
     """
     if "first_token_latency" in kwargs:
         stats.log_request(
-            request_type, name, kwargs["first_token_latency"], response_length
+            request_type, name, kwargs["first_token_latency"] * 1000, response_length
         )
     else:
-        stats.log_request(request_type, name, 0, response_length)
         stats.log_error(request_type, name, "未找到首token延迟指标")
 
 
@@ -60,12 +63,11 @@ def input_tokens_request_handler(
     response_time: int,
     response_length: int,
     exception: Optional[Exception] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> None:
     if "input_tokens" in kwargs:
         stats.log_request(request_type, name, kwargs["input_tokens"], response_length)
     else:
-        stats.log_request(request_type, name, 0, response_length)
         stats.log_error(request_type, name, "未找到输入token数")
 
 
@@ -76,13 +78,75 @@ def output_tokens_request_handler(
     response_time: int,
     response_length: int,
     exception: Optional[Exception] = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> None:
     if "output_tokens" in kwargs:
         stats.log_request(request_type, name, kwargs["output_tokens"], response_length)
     else:
-        stats.log_request(request_type, name, 0, response_length)
         stats.log_error(request_type, name, "未找到输出token数")
+
+
+def interval_latency_handler(
+    stats: RequestStats,
+    request_type: str,
+    name: str,
+    response_time: int,
+    response_length: int,
+    exception: Optional[Exception] = None,
+    **kwargs: Any,
+) -> None:
+    if "request_latency" in kwargs:
+        for latency in kwargs["request_latency"]:
+            stats.log_request(request_type, name, latency * 1000, response_length)
+    else:
+        stats.log_error(request_type, name, "未找到包间延迟")
+
+
+def input_str_length_handler(
+    stats: RequestStats,
+    request_type: str,
+    name: str,
+    response_time: int,
+    response_length: int,
+    exception: Optional[Exception] = None,
+    **kwargs: Any,
+) -> None:
+    if "request_length" in kwargs:
+        stats.log_request(request_type, name, kwargs["request_length"], response_length)
+    else:
+        stats.log_error(request_type, name, "未找到请求长度")
+
+
+def output_str_length_handler(
+    stats: RequestStats,
+    request_type: str,
+    name: str,
+    response_time: int,
+    response_length: int,
+    exception: Optional[Exception] = None,
+    **kwargs: Any,
+) -> None:
+    if "output_response_length" in kwargs:
+        stats.log_request(
+            request_type, name, kwargs["output_response_length"], response_length
+        )
+    else:
+        stats.log_error(request_type, name, "未找到输出长度")
+
+
+def total_latency_handler(
+    stats: RequestStats,
+    request_type: str,
+    name: str,
+    response_time: int,
+    response_length: int,
+    exception: Optional[Exception] = None,
+    **kwargs: Any,
+) -> None:
+    if "total_latency" in kwargs:
+        stats.log_request(request_type, name, kwargs["total_latency"], response_length)
+    else:
+        stats.log_error(request_type, name, "未找到请求耗时")
 
 
 # (1) 上文统计ttft的方法request_handler 是CustomHandler的默认行为；
@@ -107,6 +171,54 @@ CustomHandler(
     csv_suffix="output_tokens",
 )
 
+CustomHandler(
+    name="包间延迟统计",
+    request_handler=interval_latency_handler,
+    csv_suffix="interval_latency",
+)
+
+CustomHandler(
+    name="输入长度延迟统计",
+    request_handler=input_str_length_handler,
+    csv_suffix="input_str_length",
+)
+
+CustomHandler(
+    name="输出长度延迟统计",
+    request_handler=output_str_length_handler,
+    csv_suffix="output_str_length",
+)
+
+CustomHandler(
+    name="请求耗时统计",
+    request_handler=total_latency_handler,
+    csv_suffix="total_latency",
+)
+
+_remove_access_token_pattern = re.compile(r"([&?])access_token=[^&]*(&)?")
+
+
+def _remove_access_token_url_parameter(url: str) -> str:
+    # 使用正则表达式替换参数，注意分组用于保留正确连接符号
+    new_url = _remove_access_token_pattern.sub(
+        lambda m: m.group(1) if m.group(2) else "", url
+    )
+
+    # 移除可能遗留在结尾的 '&' 或 '?'
+    if new_url.endswith("?") or new_url.endswith("&"):
+        new_url = new_url[:-1]
+
+    return new_url
+
+
+class _InnerResponseProcessRet:
+    def __init__(
+        self, request_meta: Dict, last_resp: Optional[QfResponse], merged_result: str
+    ):
+        self.request_meta = request_meta
+        self.last_resp = last_resp
+        self.merged_result = merged_result
+
 
 class QianfanCustomHttpSession(CustomHttpSession):
     """
@@ -114,11 +226,111 @@ class QianfanCustomHttpSession(CustomHttpSession):
     """
 
     exc: Optional[Exception] = None
+    model: str = ""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._file_lock: Any = GlobalData.data["file_lock"]
+        super().__init__(*args, **kwargs)
 
     def _request_internal(
         self, context: Optional[Dict[str, Any]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
-        return {}
+        context = context or {}
+        start_time = time.time()
+        res: Dict = {}
+        request_meta = self._prepare_request_meta(context, **kwargs)
+
+        try:
+            kwargs["retry_count"] = 0
+            responses = self._get_request(context, **kwargs)
+            processed_resp = self._process_responses(responses, request_meta)
+
+            last_resp = processed_resp.last_resp
+            request_meta = processed_resp.request_meta
+
+            assert last_resp is not None
+            res = {
+                "headers": last_resp.headers,
+                "stat": last_resp.statistic,
+                "body": last_resp.body,
+            }
+            res["body"]["result"] = processed_resp.merged_result
+            request_meta["output_response_length"] = len(processed_resp.merged_result)
+            request_meta["total_latency"] = last_resp.statistic["total_latency"] * 1000
+        except Exception as e:
+            self.exc = e
+            resp = QfResponse(-1)
+            last_resp = resp
+            setattr(resp, "url", self.model)
+            setattr(resp, "reason", str(e))
+            setattr(resp, "status_code", 500)
+
+        if self.exc is None and last_resp is not None and last_resp.request is not None:
+            res["request"] = last_resp.request.requests_args()
+
+        if GlobalData.data["log"] == 1:
+            if self.exc:
+                self._write_result(
+                    {
+                        "exception_type": str(type(self.exc)),
+                        "error": str(self.exc),
+                        "stack": "\n".join(traceback.format_tb(self.exc.__traceback__)),
+                    }
+                )
+            else:
+                if (
+                    res.get("request", {}).get("headers", {}).get("Authorization", None)
+                    is not None
+                ):
+                    del res["request"]["headers"]["Authorization"]
+
+                if len(res.get("request", {}).get("url", "")) != 0:
+                    res["request"]["url"] = _remove_access_token_url_parameter(
+                        res["request"]["url"]
+                    )
+
+                self._write_result(res)
+
+        if self.user:
+            context = {**self.user.context(), **context}
+        if self.exc is None:
+            # report succeed to locust's statistics
+            assert last_resp is not None
+            request_meta["request_type"] = "POST"
+            request_meta["response_time"] = (
+                last_resp.statistic.get("total_latency", 0) * 1000
+            )
+            request_meta["name"] = self.model
+            request_meta["context"] = context
+            request_meta["exception"] = self.exc
+            request_meta["start_time"] = start_time
+            request_meta["url"] = self.model
+            request_meta["response"] = last_resp
+        else:
+            # setting response_time to None when the request is failed
+            request_meta["response_time"] = None
+            request_meta["request_type"] = "POST"
+            request_meta["name"] = self.model
+            request_meta["context"] = context
+            request_meta["exception"] = self.exc
+            request_meta["start_time"] = start_time
+            request_meta["url"] = self.model
+            request_meta["response"] = last_resp
+        return request_meta
+
+    @abc.abstractmethod
+    def _process_responses(
+        self, responses: Iterator[QfResponse], request_meta: Dict
+    ) -> _InnerResponseProcessRet:
+        ...
+
+    @abc.abstractmethod
+    def _prepare_request_meta(self, context: Dict, **kwargs: Any) -> Dict:
+        ...
+
+    @abc.abstractmethod
+    def _get_request(self, context: Dict, **kwargs: Any) -> Iterator[QfResponse]:
+        ...
 
     def qianfan_request(
         self, context: Optional[Dict[str, Any]] = None, **kwargs: Any
@@ -143,9 +355,12 @@ class QianfanCustomHttpSession(CustomHttpSession):
                 data, input_column=input_column, output_column=output_column
             )
         elif isinstance(data, dict):
-            ret = self._transfer_json(
-                data, input_column=input_column, output_column=output_column
-            )
+            if input_column not in data and output_column not in data:
+                ret = self._transfer_body(data)
+            else:
+                ret = self._transfer_json(
+                    data, input_column=input_column, output_column=output_column
+                )
         elif isinstance(data, str):
             ret = self._transfer_txt(
                 data, input_column=input_column, output_column=output_column
@@ -169,6 +384,17 @@ class QianfanCustomHttpSession(CustomHttpSession):
     ) -> Any:
         ...
 
+    def _transfer_body(self, data: Any) -> Any:
+        ...
+
+    def _write_result(self, res: Dict) -> None:
+        res_json = json.dumps(res, ensure_ascii=False)
+        folder = GlobalData.data["record_dir"]
+        file_path = folder + "/" + "query_result.jsonl"
+        with self._file_lock:
+            with open(file_path, "a") as f:
+                f.write(res_json + "\n")
+
 
 class ChatCompletionClient(QianfanCustomHttpSession):
     def __init__(
@@ -179,7 +405,9 @@ class ChatCompletionClient(QianfanCustomHttpSession):
         user: Any,
         *args: Any,
         pool_manager: Optional[PoolManager] = None,
-        **kwargs: Any
+        version: Literal["1", "2", 1, 2] = "1",
+        app_id: Optional[str] = None,
+        **kwargs: Any,
     ):
         """
         init
@@ -188,121 +416,147 @@ class ChatCompletionClient(QianfanCustomHttpSession):
             model, request_event, user, *args, pool_manager=pool_manager, **kwargs
         )
         self.model = model
+        self.is_v2 = str(version) == "2"
+
         if is_endpoint:
-            self.chat_comp = qianfan.ChatCompletion(endpoint=model)
+            if self.is_v2:
+                raise ValueError("v2 api doesn't support endpoint")
+
+            self.chat_comp = qianfan.ChatCompletion(
+                endpoint=model,
+                forcing_disable=True,
+                **kwargs,
+            )
         else:
-            self.chat_comp = qianfan.ChatCompletion(model=model)
+            if self.is_v2:
+                self.chat_comp = qianfan.ChatCompletion(
+                    version="2",
+                    model=model,
+                    forcing_disable=True,
+                    app_id=app_id,
+                    **kwargs,
+                )
+            else:
+                self.chat_comp = qianfan.ChatCompletion(
+                    model=model, forcing_disable=True, **kwargs
+                )
 
-    def _request_internal(
-        self, context: Optional[Dict[str, Any]] = None, **kwargs: Any
-    ) -> Dict[str, Any]:
-        context = context or {}
-        if "messages" in kwargs:
-            messages = kwargs.pop("messages")
-        else:
-            messages = []
-        first_flag = True
+    def _process_responses(
+        self, responses: Iterator[QfResponse], request_meta: Dict
+    ) -> _InnerResponseProcessRet:
+        last_resp: Optional[QfResponse] = None
+        merged_query = ""
+        first_flag, all_empty = True, True
+        clear_history = False
 
-        request_meta: Dict[str, Any] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "response_length": 0,
-            "request_length": sum([len(msg) for msg in messages]),
-        }
-        last_resp = None
-        all_empty = True
-        start_time = time.time()
-        start_perf_counter = time.perf_counter()
-
-        try:
-            kwargs["retry_count"] = 0
-            responses = self.chat_comp.do(messages=messages, **kwargs)
-        except Exception as e:
-            self.exc = e
-            resp = QfResponse(-1)
+        for resp in responses:
             last_resp = resp
             setattr(resp, "url", self.model)
-            setattr(resp, "reason", str(e))
-            setattr(resp, "status_code", 500)
+            setattr(resp, "reason", None)
+            setattr(resp, "status_code", resp["code"])
 
-        if self.exc is None:
-            for resp in responses:
-                setattr(resp, "url", self.model)
-                setattr(resp, "reason", None)
-                setattr(resp, "status_code", resp["code"])
+            # 计算token数, 有usage的累加，没有的直接计算content
+            if "usage" in resp.body and resp.body["usage"] is not None:
+                request_meta["input_tokens"] = int(resp.body["usage"]["prompt_tokens"])
+                request_meta["output_tokens"] = int(
+                    resp.body["usage"]["completion_tokens"]
+                )
+            else:
+                request_meta["input_tokens"] = request_meta["request_length"]
+                request_meta["output_tokens"] = 0
 
+            if first_flag:
+                request_meta["first_token_latency"] = resp.statistic[
+                    "first_token_latency"
+                ]
+                if "first_latency_threshold" in GlobalData.data:
+                    if (
+                        request_meta["first_token_latency"]
+                        > GlobalData.data["first_latency_threshold"]
+                    ):
+                        GlobalData.data["threshold_first"].value = 1
+                first_flag = False
+
+            interval_latencies = request_meta.get("request_latency", [])
+            interval_latencies.append(resp.statistic["request_latency"])
+            request_meta["request_latency"] = interval_latencies
+
+            if not self.is_v2:
                 stream_json = resp["body"]
+                merged_query += stream_json.get("result", "")
                 clear_history = stream_json.get("need_clear_history", False)
-                if first_flag:
-                    request_meta["first_token_latency"] = (
-                        time.perf_counter() - start_perf_counter
-                    ) * 1000  # 首Token延迟
-                    if "first_latency_threshold" in GlobalData.data:
-                        if (
-                            request_meta["first_token_latency"]
-                            > GlobalData.data["first_latency_threshold"]
-                        ):
-                            GlobalData.data["threshold_first"].value = 1
-                    first_flag = False
-                content = ""
-                if "result" in stream_json:
+                if "result" in stream_json and len(stream_json["result"]) != 0:
                     content = stream_json["result"]
-                else:
-                    self.exc = Exception("ERROR CODE 结果无法解析")
-                    break
-                if "error_code" in stream_json and stream_json["error_code"] > 0:
+                elif "function_call" in stream_json:
+                    content = json.dumps(
+                        stream_json["function_call"], ensure_ascii=False
+                    )
+                    merged_query += content
+                elif "error_code" in stream_json and stream_json["error_code"] > 0:
                     self.exc = Exception(
                         "ERROR CODE {}".format(str(stream_json["error_code"]))
                     )
                     break
-                if len(content) != 0:
-                    all_empty = False
-                # 计算token数, 有usage的累加，没有的直接计算content
-                if "usage" in stream_json:
-                    request_meta["input_tokens"] = int(
-                        stream_json["usage"]["prompt_tokens"]
-                    )
-                    request_meta["output_tokens"] = int(
-                        stream_json["usage"]["completion_tokens"]
-                    )
                 else:
-                    request_meta["input_tokens"] = request_meta["request_length"]
-                    request_meta["output_tokens"] = request_meta["response_length"]
-                last_resp = resp
+                    self.exc = Exception("ERROR CODE 结果无法解析")
+                    break
+            else:
+                if "error_code" in resp.body and resp.body["error_code"] > 0:
+                    self.exc = Exception(
+                        "ERROR CODE {}".format(str(resp.body["error_code"]))
+                    )
+                    break
 
-            assert last_resp is not None
-            if all_empty and not clear_history:
-                self.exc = Exception("Response is empty")
-            elif last_resp is None and self.exc is None:
-                self.exc = Exception("Response is null")
-            elif "is_end" not in last_resp["body"]:
-                self.exc = Exception("Response not finished")
-            elif last_resp["code"] != 200 or not last_resp["body"]["is_end"]:
-                self.exc = Exception("NOT 200 OR is_end is False")
-        response_time = (time.perf_counter() - start_perf_counter) * 1000
-        if self.user:
-            context = {**self.user.context(), **context}
-        if self.exc is None:
-            # report succeed to locust's statistics
-            GlobalData.data["success_requests"].value += 1
-            request_meta["request_type"] = "POST"
-            request_meta["response_time"] = response_time
-            request_meta["name"] = self.model
-            request_meta["context"] = context
-            request_meta["exception"] = self.exc
-            request_meta["start_time"] = start_time
-            request_meta["url"] = self.model
-            request_meta["response"] = last_resp
+                if len(resp.body["choices"]) == 0:
+                    break
+
+                stream_json = resp.body["choices"][0]
+                clear_history = stream_json.get("need_clear_history", False)
+                if "delta" in stream_json:
+                    content = stream_json["delta"].get("content", "")
+                    merged_query += content
+                else:
+                    self.exc = Exception("ERROR CODE 结果无法解析")
+                    break
+
+            if len(content) != 0:
+                all_empty = False
+
+        assert last_resp is not None
+        if all_empty and not clear_history:
+            self.exc = Exception("Response is empty")
+        elif last_resp is None and self.exc is None:
+            self.exc = Exception("Response is null")
+        elif not self.is_v2 and "is_end" not in last_resp["body"]:
+            self.exc = Exception("Response not finished")
+        elif last_resp["code"] != 200 or (
+            not self.is_v2 and not last_resp["body"]["is_end"]
+        ):
+            self.exc = Exception("NOT 200 OR is_end is False")
+
+        return _InnerResponseProcessRet(request_meta, last_resp, merged_query)
+
+    def _get_request(self, context: Dict, **kwargs: Any) -> Iterator[QfResponse]:
+        if "messages" in kwargs:
+            messages = kwargs.pop("messages")
         else:
-            # setting response_time to None when the request is failed
-            request_meta["response_time"] = None
-            request_meta["request_type"] = "POST"
-            request_meta["name"] = self.model
-            request_meta["context"] = context
-            request_meta["exception"] = self.exc
-            request_meta["start_time"] = start_time
-            request_meta["url"] = self.model
-            request_meta["response"] = last_resp
+            messages = []
+
+        responses = self.chat_comp.do(messages=messages, **kwargs)
+        assert isinstance(responses, Iterator)
+        return responses
+
+    def _prepare_request_meta(self, context: Dict, **kwargs: Any) -> Dict:
+        if "messages" in kwargs:
+            messages = kwargs.pop("messages")
+        else:
+            messages = []
+
+        request_meta: Dict[str, Any] = {
+            "response_length": 0,
+            "request_length": sum([len(msg["content"]) for msg in messages]),
+        }
+
         return request_meta
 
     def _transfer_jsonl(
@@ -335,6 +589,12 @@ class ChatCompletionClient(QianfanCustomHttpSession):
         ret["messages"].append(msg)
         return ret
 
+    def _transfer_body(self, data: Any) -> Any:
+        ret = data
+        if "stream" in ret:
+            del ret["stream"]
+        return ret
+
 
 class CompletionClient(QianfanCustomHttpSession):
     def __init__(
@@ -345,7 +605,9 @@ class CompletionClient(QianfanCustomHttpSession):
         user: Any,
         *args: Any,
         pool_manager: Optional[PoolManager] = None,
-        **kwargs: Any
+        version: Literal["1", "2", 1, 2] = "1",
+        app_id: Optional[str] = None,
+        **kwargs: Any,
     ):
         """
         init
@@ -354,52 +616,68 @@ class CompletionClient(QianfanCustomHttpSession):
             model, request_event, user, *args, pool_manager=pool_manager, **kwargs
         )
         self.model = model
+        self.is_v2 = str(version) == "2"
+
         if is_endpoint:
-            self.comp = qianfan.Completion(endpoint=model)
+            if self.is_v2:
+                raise ValueError("v2 api doesn't support endpoint")
+            else:
+                self.comp = qianfan.Completion(endpoint=model, **kwargs)
         else:
-            self.comp = qianfan.Completion(model=model)
+            if self.is_v2:
+                self.comp = qianfan.Completion(
+                    version="2",
+                    model=model,
+                    app_id=app_id,
+                    forcing_disable=True,
+                    **kwargs,
+                )
+            else:
+                self.comp = qianfan.Completion(
+                    model=model, forcing_disable=True, **kwargs
+                )
 
-    def _request_internal(
-        self, context: Optional[Dict[str, Any]] = None, **kwargs: Any
-    ) -> Dict[str, Any]:
-        context = context or {}
-        if "prompt" in kwargs:
-            prompt = kwargs.pop("prompt")
-        else:
-            prompt = ""
+    def _process_responses(
+        self, responses: Iterator[QfResponse], request_meta: Dict
+    ) -> _InnerResponseProcessRet:
+        last_resp: Optional[QfResponse] = None
+        merged_query = ""
         first_flag = True
-        request_meta: Dict[str, Any] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "response_length": 0,
-            "request_length": len(prompt),
-        }
-        last_resp = None
-        all_empty = True
 
-        start_time = time.time()
-        start_perf_counter = time.perf_counter()
-        responses = self.comp.do(prompt=prompt, **kwargs)
         for resp in responses:
+            last_resp = resp
             setattr(resp, "url", self.model)
             setattr(resp, "reason", None)
             setattr(resp, "status_code", resp["code"])
 
+            # 计算token数, 有usage的累加，没有的直接计算content
+            if "usage" in resp.body and resp.body["usage"] is not None:
+                request_meta["input_tokens"] = int(resp.body["usage"]["prompt_tokens"])
+                request_meta["output_tokens"] = int(
+                    resp.body["usage"]["completion_tokens"]
+                )
+            else:
+                request_meta["input_tokens"] = request_meta["request_length"]
+                request_meta["output_tokens"] = 0
+
             stream_json = resp["body"]
+            merged_query += stream_json["result"]
             if first_flag:
-                request_meta["first_token_latency"] = (
-                    time.perf_counter() - start_perf_counter
-                ) * 1000  # 首Token延迟
+                request_meta["first_token_latency"] = resp.statistic[
+                    "first_token_latency"
+                ]
                 if (
                     request_meta["first_token_latency"]
                     > GlobalData.data["first_latency_threshold"]
                 ):
                     GlobalData.data["threshold_first"].value = 1
                 first_flag = False
-            content = ""
-            if "result" in stream_json:
-                content = stream_json["result"]
-            else:
+
+            interval_latencies = request_meta.get("request_latency", [])
+            interval_latencies.append(resp.statistic["request_latency"])
+            request_meta["request_latency"] = interval_latencies
+
+            if "result" not in stream_json:
                 self.exc = Exception("ERROR CODE 结果无法解析")
                 break
             if "error_code" in stream_json and stream_json["error_code"] > 0:
@@ -407,55 +685,30 @@ class CompletionClient(QianfanCustomHttpSession):
                     "ERROR CODE {}".format(str(stream_json["error_code"]))
                 )
                 break
-            if len(content) != 0:
-                all_empty = False
-            # 计算token数, 有usage的累加，没有的直接计算content
-            if "usage" in stream_json:
-                request_meta["input_tokens"] = int(
-                    stream_json["usage"]["prompt_tokens"]
-                )
-                request_meta["output_tokens"] = int(
-                    stream_json["usage"]["total_tokens"]
-                ) - int(stream_json["usage"]["prompt_tokens"])
-            else:
-                request_meta["input_tokens"] = request_meta["request_length"]
-                request_meta["output_tokens"] = request_meta["response_length"]
-            last_resp = resp
 
-        assert last_resp is not None
-        if all_empty:
-            self.exc = Exception("Response is empty")
-        elif last_resp is None and self.exc is None:
-            self.exc = Exception("Response is null")
-        elif "is_end" not in last_resp["body"]:
-            self.exc = Exception("Response not finished")
-        elif last_resp["code"] != 200 or not last_resp["body"]["is_end"]:
-            self.exc = Exception("NOT 200 OR is_end is False")
+        return _InnerResponseProcessRet(request_meta, last_resp, merged_query)
 
-        response_time = (time.perf_counter() - start_perf_counter) * 1000
-        if self.user:
-            context = {**self.user.context(), **context}
-        if self.exc is None:
-            # report to locust's statistics
-            GlobalData.data["success_requests"].value += 1
-            request_meta["request_type"] = "POST"
-            request_meta["response_time"] = response_time
-            request_meta["name"] = self.model
-            request_meta["context"] = context
-            request_meta["exception"] = self.exc
-            request_meta["start_time"] = start_time
-            request_meta["url"] = self.model
-            request_meta["response"] = last_resp
+    def _get_request(self, context: Dict, **kwargs: Any) -> Iterator[QfResponse]:
+        if "prompt" in kwargs:
+            prompt = kwargs.pop("prompt")
         else:
-            # setting response_time to None when the request is failed
-            request_meta["response_time"] = None
-            request_meta["request_type"] = "POST"
-            request_meta["name"] = self.model
-            request_meta["context"] = context
-            request_meta["exception"] = self.exc
-            request_meta["start_time"] = start_time
-            request_meta["url"] = self.model
-            request_meta["response"] = last_resp
+            prompt = ""
+
+        responses = self.comp.do(prompt=prompt, **kwargs)
+        assert isinstance(responses, Iterator)
+        return responses
+
+    def _prepare_request_meta(self, context: Dict, **kwargs: Any) -> Dict:
+        if "prompt" in kwargs:
+            prompt = kwargs.pop("prompt")
+        else:
+            prompt = ""
+
+        request_meta: Dict[str, Any] = {
+            "response_length": 0,
+            "request_length": len(prompt),
+        }
+
         return request_meta
 
     def _transfer_jsonl(
@@ -475,6 +728,10 @@ class CompletionClient(QianfanCustomHttpSession):
         self, data: Any, input_column: str, output_column: str, **kwargs: Any
     ) -> Any:
         return dict(prompt=data)
+
+    def _transfer_body(self, data: Any) -> Any:
+        p = data["messages"][0]["content"]
+        return dict(prompt=p)
 
 
 @events.test_start.add_listener
@@ -507,6 +764,10 @@ class QianfanLLMLoadUser(CustomUser):
 
         model_type = GlobalData.data["model_type"]
         is_endpoint = GlobalData.data["is_endpoint"]
+
+        app_id = GlobalData.data.get("app_id", None)
+        version = GlobalData.data.get("version", "1")
+
         self.client: QianfanCustomHttpSession
         if model_type == "ChatCompletion":
             self.client = ChatCompletionClient(
@@ -515,6 +776,9 @@ class QianfanLLMLoadUser(CustomUser):
                 request_event=self.environment.events.request,
                 user=self,
                 pool_manager=self.pool_manager,
+                version=version,
+                app_id=app_id,
+                **kwargs,
             )
         elif model_type == "Completion":
             self.client = CompletionClient(  # noqa
@@ -523,6 +787,9 @@ class QianfanLLMLoadUser(CustomUser):
                 request_event=self.environment.events.request,
                 user=self,
                 pool_manager=self.pool_manager,
+                version=version,
+                app_id=app_id,
+                **kwargs,
             )
         else:
             raise Exception("Unsupported model type: %s." % model_type)
@@ -543,4 +810,10 @@ class QianfanLLMLoadUser(CustomUser):
         body = self.client.transfer_data(data, self.input_column, self.output_column)
         if hyperparameters is None:
             hyperparameters = {}
-        self.client.qianfan_request(stream=True, **body, **hyperparameters)
+        # 参数去重
+        keys_to_delete = [key for key in hyperparameters.keys() if key in body]
+        for key in keys_to_delete:
+            del hyperparameters[key]
+        self.client.qianfan_request(
+            show_total_latency=True, stream=True, **body, **hyperparameters
+        )

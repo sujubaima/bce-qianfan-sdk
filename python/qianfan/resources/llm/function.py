@@ -13,12 +13,14 @@
 # limitations under the License.
 import json
 import re
-from typing import Any, AsyncIterator, Dict, Iterator, List, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import qianfan.errors as errors
+from qianfan.consts import Consts, DefaultValue
 from qianfan.resources.llm.base import (
     UNSPECIFIED_MODEL,
     BaseResourceV1,
+    BaseResourceV2,
 )
 from qianfan.resources.typing import QfLLMInfo, QfMessages, QfResponse
 
@@ -47,157 +49,102 @@ _SPLIT_FUNCTIONS_SCHEMAS = """\n-"""
 
 _PROMPT_IDENTIFIER = "{}"
 
+_RESPONSE_ACTION_PREFIX = "Action: "
 
-class Function(BaseResourceV1):
+_RESPONSE_ACTION_INPUT_PREFIX = "Action Input: "
+
+
+class FunctionV2(BaseResourceV2):
     """
     QianFan Function is an agent for calling QianFan
     ChatCompletion with function call API.
     """
 
-    @classmethod
-    def _supported_models(cls) -> Dict[str, QfLLMInfo]:
-        """
-        preset model list of Functions
-        support model:
-        - ERNIE-Functions-8K
-
-        Args:
-            None
-
-        Returns:
-            a dict which key is preset model and value is the endpoint
-
-        """
-        info_list = {
-            "ERNIE-Functions-8K": QfLLMInfo(
-                endpoint="/chat/ernie-func-8k",
-                required_keys={"messages"},
-                optional_keys={
-                    "temperature",
-                    "top_p",
-                    "penalty_score",
-                    "system",
-                    "user_id",
-                    "stop",
-                    "max_output_tokens",
-                },
-                max_input_chars=11200,
-                max_input_tokens=7168,
-                input_price_per_1k_tokens=0.004,
-                output_price_per_1k_tokens=0.008,
-            ),
-            UNSPECIFIED_MODEL: QfLLMInfo(
-                endpoint="",
-                required_keys={"messages"},
-                optional_keys=set(),
-            ),
-        }
-
-        return info_list
-
-    @classmethod
-    def _default_model(cls) -> str:
-        """
-        default model of functions calling
-
-        Args:
-            None
-
-        Returns:
-           "ERNIE-Functions-8K"
-
-        """
-        return "ERNIE-Functions-8K"
+    def _api_path(self) -> str:
+        return Consts.ChatV2API
 
     def do(
         self,
         messages: Union[List[Dict], QfMessages],
-        functions: List[Dict],
+        model: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        stream: bool = False,
+        retry_count: int = DefaultValue.RetryCount,
+        request_timeout: float = DefaultValue.RetryTimeout,
+        request_id: Optional[str] = None,
+        backoff_factor: float = DefaultValue.RetryBackoffFactor,
+        auto_concat_truncate: bool = False,
+        truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
+        truncate_overlong_msgs: bool = False,
         **kwargs: Any,
     ) -> Union[QfResponse, Iterator[QfResponse]]:
-        """
-        Perform chat-based language generation using user-supplied messages.
-
-        Parameters:
-          messages (Union[List[Dict], QfMessages]):
-            A list of messages in the conversation including the one from system. Each
-            message should be a dictionary containing 'role' and 'content' keys,
-            representing the role (either 'user', or 'assistant') and content of the
-            message, respectively. Alternatively, you can provide a QfMessages object
-            for convenience.
-          functions (List[Dict]):
-            A list of functions that will be used in function calling.
-          kwargs (Any):
-            Additional keyword arguments that can be passed to customize the request.
-
-        Example:
-        ```
-        func_list = [{
-            "name": "function_name",
-            "description": "description_of_function",
-            "parameters":{
-                "type":"object",
-                "properties":{
-                    "param1":{
-                        "type":"string",
-                        "description": "desc of params xxx"
-                    }
-                },
-                "required":["param1"]
-            }
-        }]
-        Function().do(messages = ..., functions=func_list)
-        ```
-
-        """
-        if len(functions) <= 0:
-            raise errors.InvalidArgumentError(
-                "functions should be a list of functions, "
-                "each function is a dictionary with name and description."
-            )
-        if kwargs.get("stream") is True:
-            raise errors.InvalidArgumentError("Function does not support stream mode.")
-
         if isinstance(messages, QfMessages):
-            temp_messages = messages._to_list()
-        else:
-            temp_messages = messages
+            messages = messages._to_list()
+        return self._do(
+            messages=messages,
+            model=model,
+            stream=stream,
+            retry_count=retry_count,
+            request_timeout=request_timeout,
+            request_id=request_id,
+            backoff_factor=backoff_factor,
+            **kwargs,
+        )
 
+    async def ado(
+        self,
+        messages: Union[List[Dict], QfMessages],
+        model: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        stream: bool = False,
+        retry_count: int = DefaultValue.RetryCount,
+        request_timeout: float = DefaultValue.RetryTimeout,
+        request_id: Optional[str] = None,
+        backoff_factor: float = DefaultValue.RetryBackoffFactor,
+        auto_concat_truncate: bool = False,
+        truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
+        truncate_overlong_msgs: bool = False,
+        **kwargs: Any,
+    ) -> Union[QfResponse, AsyncIterator[QfResponse]]:
+        if isinstance(messages, QfMessages):
+            messages = messages._to_list()
+        return await self._ado(
+            messages=messages,
+            model=model,
+            stream=stream,
+            retry_count=retry_count,
+            request_timeout=request_timeout,
+            request_id=request_id,
+            backoff_factor=backoff_factor,
+            **kwargs,
+        )
+
+    @classmethod
+    def _default_model(cls) -> str:
+        return "ernie-func-8k"
+
+
+class BaseFunction:
+    def _render_query(
+        self, query: Dict[str, Any], messages: List[Dict], functions: List[Dict]
+    ) -> None:
         functions_schemas = self._render_functions_prompt(functions)
-        temp_messages[0] = self._render_user_query_msg(
-            temp_messages[0], functions=functions_schemas
+        messages[0] = self._render_user_query_msg(
+            messages[0], functions=functions_schemas
         )
 
         # render function message:
-        for i, msg in enumerate(temp_messages):
+        for i, msg in enumerate(messages):
             if msg["role"] == "function":
                 msg["role"] = "user"
-                msg.pop("name")
+                if "name" in msg:
+                    msg.pop("name")
             elif msg["role"] == "assistant" and msg.get("function_call"):
-                temp_messages[i] = self._render_assistant_msg(msg)
+                messages[i] = self._render_assistant_msg(msg)
 
-        kwargs["messages"] = temp_messages
-        if "functions" in kwargs:
-            kwargs.pop("functions")
-
-        resp = super()._do(**kwargs)
-        assert isinstance(resp, QfResponse)
-        return self._convert_function_call_response(resp)
-
-    def _convert_function_call_response(self, resp: QfResponse) -> QfResponse:
-        # parse response content
-        action_content = resp.body.get("result", "")
-        action = re.search(r"Action: (\w+)", action_content)
-        action_input = re.search(r"Action Input: (.+)", action_content)
-
-        # update QfResponse
-        if action and action_input:
-            resp.body["function_call"] = {
-                "name": action.group(1),
-                "arguments": action_input.group(1),
-            }
-            resp.body["result"] = ""
-        return resp
+        query["messages"] = messages
+        if "functions" in query:
+            query.pop("functions")
 
     def _render_assistant_msg(self, msg: Dict) -> Dict:
         function_call = msg.get("function_call", {})
@@ -254,11 +201,239 @@ class Function(BaseResourceV1):
             return _prompt
 
         return _render(prompt_template, variables, **kwargs)
+        return "ernie-func-8k"
+
+
+class Function(BaseResourceV1, BaseFunction):
+    """
+    QianFan Function is an agent for calling QianFan
+    ChatCompletion with function call API.
+    """
+
+    def _self_supported_models(self) -> Dict[str, QfLLMInfo]:
+        return self._local_models()
+
+    def _local_models(self) -> Dict[str, QfLLMInfo]:
+        """
+        preset model list of Functions
+        support model:
+        - ERNIE-Functions-8K
+
+        Args:
+            None
+
+        Returns:
+            a dict which key is preset model and value is the endpoint
+
+        """
+        info_list = {
+            "ERNIE-Functions-8K": QfLLMInfo(
+                endpoint="/chat/ernie-func-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "system",
+                    "user_id",
+                    "stop",
+                    "max_output_tokens",
+                    "enable_user_memory",
+                    "user_memory_extract_level",
+                },
+                max_input_chars=11200,
+                max_input_tokens=7168,
+                input_price_per_1k_tokens=0.004,
+                output_price_per_1k_tokens=0.008,
+            ),
+            UNSPECIFIED_MODEL: QfLLMInfo(
+                endpoint="",
+                required_keys={"messages"},
+                optional_keys=set(),
+            ),
+        }
+
+        return info_list
+
+    @classmethod
+    def _default_model(cls) -> str:
+        """
+        default model of functions calling
+
+        Args:
+            None
+
+        Returns:
+           "ERNIE-Functions-8K"
+
+        """
+        return "ERNIE-Functions-8K"
+
+    def do(
+        self,
+        messages: Union[List[Dict], QfMessages],
+        functions: List[Dict] = [],
+        **kwargs: Any,
+    ) -> Union[QfResponse, Iterator[QfResponse]]:
+        """
+        Perform chat-based language generation using user-supplied messages.
+
+        Parameters:
+          messages (Union[List[Dict], QfMessages]):
+            A list of messages in the conversation including the one from system. Each
+            message should be a dictionary containing 'role' and 'content' keys,
+            representing the role (either 'user', or 'assistant') and content of the
+            message, respectively. Alternatively, you can provide a QfMessages object
+            for convenience.
+          functions (List[Dict]):
+            A list of functions that will be used in function calling.
+          kwargs (Any):
+            Additional keyword arguments that can be passed to customize the request.
+
+        Example:
+        ```
+        func_list = [{
+            "name": "function_name",
+            "description": "description_of_function",
+            "parameters":{
+                "type":"object",
+                "properties":{
+                    "param1":{
+                        "type":"string",
+                        "description": "desc of params xxx"
+                    }
+                },
+                "required":["param1"]
+            }
+        }]
+        Function().do(messages = ..., functions=func_list)
+        ```
+
+        """
+        if isinstance(messages, QfMessages):
+            temp_messages = messages._to_list()
+        else:
+            temp_messages = messages
+        for k in [
+            "auto_concat_truncate",
+            "truncated_continue_prompt",
+            "truncate_overlong_msgs",
+        ]:
+            if k in kwargs:
+                del kwargs[k]
+
+        for k in ["request_id"]:
+            if k in kwargs and kwargs.get(k) is None:
+                del kwargs[k]
+
+        if not functions:
+            # 没有传入functions，不特殊处理，直接走普通的base_resource请求模式
+            kwargs["messages"] = temp_messages
+            return super()._do(**kwargs)
+        self._render_query(query=kwargs, messages=temp_messages, functions=functions)
+
+        resp = super()._do(**kwargs)
+        if isinstance(resp, QfResponse):
+            return self._convert_function_call_response(resp)
+        elif isinstance(resp, Iterator):
+            return self._convert_function_call_stream_response(resp)
+        else:
+            raise ValueError(f"Invalid type of response. {type(resp)}")
+
+    def _convert_function_call_stream_response(
+        self, iter: Iterator[QfResponse]
+    ) -> Iterator[QfResponse]:
+        not_match: Optional[bool] = None
+        current_resp_result = ""
+        last_message: Optional[QfResponse] = None
+        for r in iter:
+            # not match the function call return
+            # return stream iterator
+            last_message = r
+            if not_match:
+                yield r
+                continue
+
+            current_resp_result += r.get("result", "")
+            # not match, read utils the whole result for parsing
+            if not_match is False:
+                continue
+            action = re.search(f"{_RESPONSE_ACTION_PREFIX}(\w+)", current_resp_result)
+            if action:
+                not_match = False
+            elif len(current_resp_result) > len(_RESPONSE_ACTION_PREFIX):
+                r.body["result"] = current_resp_result
+                not_match = True
+                yield r
+
+        action_input = re.search(
+            f"{_RESPONSE_ACTION_INPUT_PREFIX}(.+)", current_resp_result
+        )
+        # match the function call
+        if action and action_input:
+            assert last_message is not None
+            last_message.body["function_call"] = {
+                "name": action.group(1),
+                "arguments": action_input.group(1),
+            }
+            last_message.body["result"] = ""
+            yield last_message
+
+    async def _convert_function_call_stream_response_async(
+        self, async_iter: AsyncIterator[QfResponse]
+    ) -> AsyncIterator[QfResponse]:
+        not_match: Optional[bool] = None
+        current_resp_result = ""
+        last_message: Optional[QfResponse] = None
+        async for r in async_iter:
+            last_message = r
+            if not_match:
+                yield r
+                continue
+
+            current_resp_result += r.get("result", "")
+            if not_match is False:
+                continue
+
+            action = re.search(f"{_RESPONSE_ACTION_PREFIX}(\w+)", current_resp_result)
+            if action:
+                not_match = False
+            elif len(current_resp_result) > len(_RESPONSE_ACTION_PREFIX):
+                r.body["result"] = current_resp_result
+                not_match = True
+                yield r
+
+        action_input = re.search(
+            f"{_RESPONSE_ACTION_INPUT_PREFIX}(.+)", current_resp_result
+        )
+        if action and action_input:
+            assert last_message is not None
+            last_message.body["function_call"] = {
+                "name": action.group(1),
+                "arguments": action_input.group(1),
+            }
+            last_message.body["result"] = ""
+            yield last_message
+
+    def _convert_function_call_response(self, resp: QfResponse) -> QfResponse:
+        # parse response content
+        action_content = resp.body.get("result", "")
+        action = re.search(f"{_RESPONSE_ACTION_PREFIX}(\w+)", action_content)
+        action_input = re.search(f"{_RESPONSE_ACTION_INPUT_PREFIX}(.+)", action_content)
+
+        # update QfResponse
+        if action and action_input:
+            resp.body["function_call"] = {
+                "name": action.group(1),
+                "arguments": action_input.group(1),
+            }
+            resp.body["result"] = ""
+        return resp
 
     async def ado(
         self,
         messages: Union[List[Dict], QfMessages],
-        functions: List[Dict],
+        functions: List[Dict] = [],
         **kwargs: Any,
     ) -> Union[QfResponse, AsyncIterator[QfResponse]]:
         """
@@ -296,35 +471,32 @@ class Function(BaseResourceV1):
         ```
 
         """
-        if len(functions) <= 0:
-            raise errors.InvalidArgumentError(
-                "functions should be a list of functions, "
-                "each function is a dictionary with name and description."
-            )
-        if kwargs.get("stream") is True:
-            raise errors.InvalidArgumentError("Function does not support stream mode.")
-
         if isinstance(messages, QfMessages):
             temp_messages = messages._to_list()
         else:
             temp_messages = messages
+        for k in [
+            "auto_concat_truncate",
+            "truncated_continue_prompt",
+            "truncate_overlong_msgs",
+        ]:
+            if k in kwargs:
+                del kwargs[k]
 
-        functions_schemas = self._render_functions_prompt(functions)
-        temp_messages[0] = self._render_user_query_msg(
-            temp_messages[0], functions=functions_schemas
-        )
-        # render function message:
-        for i, msg in enumerate(temp_messages):
-            if msg["role"] == "function":
-                msg["role"] = "user"
-                msg.pop("name")
-            elif msg["role"] == "assistant" and msg.get("function_call"):
-                temp_messages[i] = self._render_assistant_msg(msg)
+        for k in ["request_id"]:
+            if k in kwargs and kwargs.get(k) is None:
+                del kwargs[k]
 
-        kwargs["messages"] = temp_messages
-        if "functions" in kwargs:
-            kwargs.pop("functions")
+        if not functions:
+            # 没有传入functions，不特殊处理，直接走普通的base_resource请求模式
+            kwargs["messages"] = temp_messages
+            return await super()._ado(**kwargs)
+        self._render_query(query=kwargs, messages=temp_messages, functions=functions)
 
         resp = await super()._ado(**kwargs)
-        assert isinstance(resp, QfResponse)
-        return self._convert_function_call_response(resp)
+        if isinstance(resp, QfResponse):
+            return self._convert_function_call_response(resp)
+        elif isinstance(resp, AsyncIterator):
+            return self._convert_function_call_stream_response_async(resp)
+        else:
+            raise ValueError(f"Invalid type of response. {type(resp)}")

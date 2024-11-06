@@ -762,7 +762,7 @@ class Model(object):
                 k: v
                 for k, v in {
                     **kwargs,
-                    "maker": marker,
+                    "marker": marker,
                     "maxKeys": max_keys,
                     "pageReverse": page_reverse,
                 }.items()
@@ -807,7 +807,7 @@ class Model(object):
                 k: v
                 for k, v in {
                     **kwargs,
-                    "maker": marker,
+                    "marker": marker,
                     "maxKeys": max_keys,
                     "pageReverse": page_reverse,
                 }.items()
@@ -1202,6 +1202,7 @@ class Model(object):
             marker: Optional[str] = None,
             max_keys: Optional[int] = None,
             page_reverse: Optional[bool] = None,
+            source_model_id: Optional[str] = None,
             **kwargs: Any,
         ) -> QfRequest:
             """
@@ -1216,6 +1217,8 @@ class Model(object):
                 max keys of the page.
             page_reverse: Optional[bool] = None,
                 page reverse or not.
+            source_model_id: Optional[str] = None,
+                model id for filter.
 
             kwargs:
                 Additional keyword arguments that can be passed to customize
@@ -1234,9 +1237,10 @@ class Model(object):
                 k: v
                 for k, v in {
                     **kwargs,
-                    "maker": marker,
+                    "marker": marker,
                     "maxKeys": max_keys,
                     "pageReverse": page_reverse,
+                    "sourceModelId": source_model_id,
                 }.items()
                 if v is not None
             }

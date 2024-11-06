@@ -32,6 +32,10 @@ type BaseModel struct {
 	*Requestor        // Requstor 作为基类
 }
 
+func NewBaseModel(options ...Option) *BaseModel {
+	return &BaseModel{Requestor: newRequestor(makeOptions(options...))}
+}
+
 // 使用量信息
 type ModelUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`     // 问题tokens数
@@ -42,6 +46,26 @@ type ModelUsage struct {
 type ModelAPIResponse interface {
 	GetError() (int, string)
 	ClearError()
+}
+
+type RawRequest map[string]any
+
+func (r RawRequest) SetExtra(extra map[string]any) {
+	r["extra"] = extra
+}
+
+func (r RawRequest) GetExtra() map[string]any {
+	extra, ok := r["extra"]
+	if !ok {
+		return make(map[string]any)
+	} else {
+		return extra.(map[string]any)
+	}
+}
+
+type RawResponse struct {
+	baseResponse  `json:",omitempty"`
+	ModelAPIError `json:",omitempty"`
 }
 
 // API 错误信息
@@ -140,7 +164,7 @@ func (s *ModelResponseStream) checkResponseError(ctx context.Context) error {
 					return err
 				}
 				retryCount--
-			} else if resp.ErrorCode != QPSLimitReachedErrCode && resp.ErrorCode != ServerHighLoadErrCode {
+			} else if !contains(GetConfig().RetryErrCodes, resp.ErrorCode) {
 				return apiError
 			}
 			err = s.reset()
@@ -179,6 +203,33 @@ func (s *ModelResponseStream) Recv() (*ModelResponse, error) {
 	return &resp, nil
 }
 
+type RawModelResponseStream struct {
+	*ModelResponseStream
+}
+
+func newRawModelResponseStream(si *streamInternal) (*RawModelResponseStream, error) {
+	s := &RawModelResponseStream{}
+	mrs, err := newModelResponseStream(si)
+	if err != nil {
+		return s, err
+	}
+
+	s.ModelResponseStream = mrs
+	return s, nil
+}
+
+func (s *RawModelResponseStream) Recv() (*RawResponse, error) {
+	var resp RawResponse
+	err := s.streamInternal.Recv(&resp)
+	if err != nil {
+		return nil, err
+	}
+	if err = checkResponseError(&resp); err != nil {
+		return &resp, err
+	}
+	return &resp, nil
+}
+
 func checkResponseError(resp ModelAPIResponse) error {
 	errCode, errMsg := resp.GetError()
 	if errCode != 0 {
@@ -202,7 +253,7 @@ func (m *BaseModel) withRetry(fn func() error) error {
 		var apiErr *APIError
 		ok := errors.As(err, &apiErr)
 		if ok {
-			if apiErr.Code != QPSLimitReachedErrCode && apiErr.Code != ServerHighLoadErrCode {
+			if !contains(GetConfig().RetryErrCodes, apiErr.Code) {
 				return err
 			}
 		}
@@ -271,4 +322,21 @@ func isUnsupportedModelError(err error) bool {
 		}
 	}
 	return false
+}
+
+func (m *BaseModel) Do(ctx context.Context, request *QfRequest) (*RawResponse, error) {
+	rawResponse := &RawResponse{}
+	if err := m.requestResource(ctx, request, rawResponse); err != nil {
+		return nil, err
+	}
+	return rawResponse, nil
+}
+
+func (m *BaseModel) Stream(ctx context.Context, request *QfRequest) (*RawModelResponseStream, error) {
+	request.Body["stream"] = true
+	si, err := m.requestStream(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return newRawModelResponseStream(si)
 }

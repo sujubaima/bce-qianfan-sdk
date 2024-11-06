@@ -24,6 +24,7 @@ import random
 import threading
 import time
 import zipfile
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from io import BytesIO
 
@@ -151,6 +152,7 @@ def chat_completion_stream_response_v2(model, messages):
                 "id": "as-5j1w2wzna2",
                 "object": "chat.completion",
                 "created": 1717488564,
+                "model": model,
                 "choices": [
                     {
                         "index": 0,
@@ -159,6 +161,7 @@ def chat_completion_stream_response_v2(model, messages):
                         },
                         "is_end": is_end,
                         "need_clear_history": False,
+                        # "finish_reason": "normal",
                     }
                 ],
                 "usage": {
@@ -174,6 +177,7 @@ def chat_completion_stream_response_v2(model, messages):
                 },
             }
         ) + "\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def check_messages(messages):
@@ -263,6 +267,31 @@ def access_token_checker(func):
             time.sleep(delay)
         except Exception:
             pass
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def iam_v3_auth_checker(func):
+    """
+    decorator for checking bearer token
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        """
+        wrapper for function
+        """
+        authorization = request.headers.get("authorization")
+        if not authorization.startswith("Bearer"):
+            return flask.Response(
+                status=403,
+                headers={
+                    "X-Bce-Error-Message": (
+                        "mock server error, authorization or bce_date not found"
+                    )
+                },
+            )
         return func(*args, **kwargs)
 
     return wrapper
@@ -362,7 +391,6 @@ def chat(model_name):
     request_id = request_header.get(Consts.XRequestID)
     if model_name.startswith("test_retry"):
         global retry_cnt
-        print("mock retry cnt", retry_cnt)
         if model_name not in retry_cnt:
             retry_cnt[model_name] = 1
         if retry_cnt[model_name] % 3 != 0:
@@ -622,8 +650,36 @@ def chat(model_name):
     )
 
 
+history_tokens = {}
+
+
+@app.route(Consts.IAMBearerTokenAPI, methods=["GET"])
+def iam_get_bearer_token():
+    expire_seconds = request.args.get("expireInSeconds")
+    current_time = datetime.now(timezone.utc)
+    # 加上 100 秒
+    expire_time = current_time + timedelta(seconds=int(expire_seconds))
+
+    # 格式化为指定格式
+    current_time_str = current_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    expire_time_str = expire_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    token = f"bce-v3/ALTAK-XNYpvSpWTC0Qr0cB6LoZR/{generate_letter_num_random_id(16)}"
+    global history_tokens
+    history_tokens[token] = expire_time
+
+    return json_response(
+        {
+            "userId": "6c6093c96f0241c087af184cc5729de8",
+            "token": token,
+            "status": "enable",
+            "createTime": current_time_str,
+            "expireTime": expire_time_str,
+        },
+    )
+
+
 @app.route(Consts.ChatV2API, methods=["POST"])
-@iam_auth_checker
+@iam_v3_auth_checker
 def chat_v2():
     """
     mock chat completion v2 api
@@ -634,7 +690,6 @@ def chat_v2():
     model_name = r["model"]
     if model_name.startswith("test_retry"):
         global retry_cnt
-        print("mock retry cnt", retry_cnt)
         if model_name not in retry_cnt:
             retry_cnt[model_name] = 1
         if retry_cnt[model_name] % 3 != 0:
@@ -672,6 +727,7 @@ def chat_v2():
             "id": "as-sq01fe52em",
             "object": "chat.completion",
             "created": 1717487283,
+            "model": model_name,
             "choices": [
                 {
                     "index": 0,
@@ -1194,11 +1250,25 @@ def finetune_v2_supported_models(body):
                                     "parameterScale": "FullFineTuning",
                                     "supportHyperParameterConfig": [
                                         {
+                                            "key": "epoch",
+                                            "type": "int",
+                                            "checkType": "range",
+                                            "checkValue": [1, 50],
+                                            "default": 1,
+                                        },
+                                        {
                                             "checkType": "range",
                                             "checkValue": [0.0001, 0.1],
                                             "default": 0.01,
                                             "key": "weightDecay",
                                             "type": "float",
+                                        },
+                                        {
+                                            "key": "learningRate",
+                                            "type": "float",
+                                            "checkType": "range",
+                                            "checkValue": [1e-06, 4e-05],
+                                            "default": 3e-05,
                                         },
                                     ],
                                 },
@@ -1206,11 +1276,32 @@ def finetune_v2_supported_models(body):
                                     "parameterScale": "FullFineTuning",
                                     "supportHyperParameterConfig": [
                                         {
+                                            "key": "epoch",
+                                            "type": "int",
+                                            "checkType": "range",
+                                            "checkValue": [1, 50],
+                                            "default": 1,
+                                        },
+                                        {
                                             "checkType": "range",
                                             "checkValue": [0.0001, 0.1],
                                             "default": 0.01,
                                             "key": "custom_key",
                                             "type": "float",
+                                        },
+                                        {
+                                            "key": "learningRate",
+                                            "type": "float",
+                                            "checkType": "range",
+                                            "checkValue": [1e-06, 4e-05],
+                                            "default": 3e-05,
+                                        },
+                                        {
+                                            "key": "maxSeqLen",
+                                            "type": "int",
+                                            "checkType": "choice",
+                                            "checkValue": [512, 1024, 2048, 4096, 8192],
+                                            "default": 4096,
                                         },
                                     ],
                                 },
@@ -1218,11 +1309,32 @@ def finetune_v2_supported_models(body):
                                     "parameterScale": "LoRA",
                                     "supportHyperParameterConfig": [
                                         {
+                                            "key": "epoch",
+                                            "type": "int",
+                                            "checkType": "range",
+                                            "checkValue": [1, 50],
+                                            "default": 1,
+                                        },
+                                        {
                                             "checkType": "choice",
                                             "checkValue": ["True", "False"],
                                             "default": "True",
                                             "key": "loraAllLinear",
                                             "type": "string",
+                                        },
+                                        {
+                                            "key": "learningRate",
+                                            "type": "float",
+                                            "checkType": "range",
+                                            "checkValue": [1e-06, 4e-05],
+                                            "default": 3e-05,
+                                        },
+                                        {
+                                            "key": "maxSeqLen",
+                                            "type": "int",
+                                            "checkType": "choice",
+                                            "checkValue": [512, 1024, 2048, 4096, 8192],
+                                            "default": 4096,
                                         },
                                     ],
                                 },
@@ -1235,11 +1347,32 @@ def finetune_v2_supported_models(body):
                                     "parameterScale": "FullFineTuning",
                                     "supportHyperParameterConfig": [
                                         {
+                                            "key": "epoch",
+                                            "type": "int",
+                                            "checkType": "range",
+                                            "checkValue": [1, 50],
+                                            "default": 1,
+                                        },
+                                        {
                                             "checkType": "choice",
                                             "checkValue": [4096, 8192],
                                             "default": 4096,
                                             "key": "maxSeqLenb",
                                             "type": "int",
+                                        },
+                                        {
+                                            "key": "learningRate",
+                                            "type": "float",
+                                            "checkType": "range",
+                                            "checkValue": [1e-06, 4e-05],
+                                            "default": 3e-05,
+                                        },
+                                        {
+                                            "key": "maxSeqLen",
+                                            "type": "int",
+                                            "checkType": "choice",
+                                            "checkValue": [512, 1024, 2048, 4096, 8192],
+                                            "default": 4096,
                                         },
                                     ],
                                 }
@@ -1256,6 +1389,7 @@ def finetune_v2_supported_models(body):
 @app.route(Consts.DatasetV2OfflineBatchInferenceAPI, methods=["POST"])
 def offline_batch_inference_task_v2():
     action = request.args.get(Consts.ConsoleAPIQueryAction)
+    body = request.json
     action_handler = {
         Consts.DatasetCreateOfflineBatchInferenceAction: (
             create_offline_batch_inference_task_v2
@@ -1263,11 +1397,28 @@ def offline_batch_inference_task_v2():
         Consts.DatasetDescribeOfflineBatchInferenceAction: (
             describe_offline_batch_inference_task_v2
         ),
+        Consts.DatasetDescribeOfflineBatchInferencesAction: (
+            describe_offline_batch_inference_tasks_v2
+        ),
     }
-    return action_handler.get(action)()
+    return action_handler.get(action)(body)
 
 
-def create_offline_batch_inference_task_v2():
+def create_offline_batch_inference_task_v2(body):
+    if "afsConfig" in body:
+        user_name = body.get("afsConfig").get("userName")
+        if user_name in ["test_bf_invalid_username", ""]:
+            return json_response(
+                data={
+                    "requestId": "deb38cd1-d880-4259-a35d-c383f0fcddca",
+                    "code": "InappropriateJSON",
+                    "message": (
+                        "The JSON you provided was well-formed and valid, but"
+                        "not appropriate for this operation. param[userName] invalid."
+                    ),
+                },
+                status_code=400,
+            )
     return json_response(
         {
             "requestId": "c1111-944f-4a9a-a12b-cc9o99999",
@@ -1276,7 +1427,7 @@ def create_offline_batch_inference_task_v2():
     )
 
 
-def describe_offline_batch_inference_task_v2():
+def describe_offline_batch_inference_task_v2(body):
     return json_response(
         {
             "requestId": "b6999-5fdc-495c-b526-ef68145345354",
@@ -1289,8 +1440,63 @@ def describe_offline_batch_inference_task_v2():
                 "inferenceParams": {},
                 "inputBosUri": "bos:/sdk_test/inference-input/",
                 "outputBosUri": "bos:/sdk-test/inference-output/",
+                "inputAfsUri": "afs:/sdk_test/inference-afs-input/",
+                "outputAfsUri": "afs:/sdk-test/inference-afs-output/",
+                "outputDir": "662f7bfb805xxx16942",
+                "progress": 300,
                 "createTime": "2024-03-05T07:43:48Z",
                 "finishTime": "2024-03-05T15:44:56Z",
+            },
+        }
+    )
+
+
+def describe_offline_batch_inference_tasks_v2(body):
+    return json_response(
+        {
+            "requestId": "1bef3f87-c5b2-4419-936b-5xxxxxxxx4",
+            "result": {
+                "taskList": [
+                    {
+                        "taskId": "infer-9ixxxxxxmp",
+                        "name": "name",
+                        "description": "description",
+                        "endpoint": "http://xxx",
+                        "inferenceParams": {"temperature": 0.9, "top_p": 0.3},
+                        "runStatus": "Running",
+                        "inputBosUri": "bos:/user_a/bucket",
+                        "outputBosUri": "bos:/user_b/output",
+                        "outputDir": "662f7bfb80xxxd516942",
+                        "inputTokenUsage": 10000,
+                        "outputTokenUsage": 10000,
+                        "progress": 2000,
+                        "creator": "accountName",
+                        "createTime": "2024-01-16T09:48:35Z",
+                        "finishTime": "2024-01-16T10:48:35Z",
+                    },
+                    {
+                        "taskId": "infer-9ixxxxxxm1",
+                        "name": "name",
+                        "description": "description",
+                        "endpoint": "http://xxx",
+                        "inferenceParams": {"temperature": 0.9, "top_p": 0.3},
+                        "runStatus": "Done",
+                        "inputBosUri": "bos:/user_a/bucket",
+                        "outputBosUri": "bos:/user_b/output",
+                        "outputDir": "662f7bfb80xxxd516942",
+                        "inputTokenUsage": 10000,
+                        "outputTokenUsage": 10000,
+                        "progress": 300,
+                        "creator": "accountName",
+                        "createTime": "2024-01-16T09:48:35Z",
+                        "finishTime": "2024-01-16T10:48:35Z",
+                    },
+                ],
+                "pageInfo": {
+                    "marker": "infer-n50985crhqq3",
+                    "maxKeys": 100,
+                    "isTruncated": False,
+                },
             },
         }
     )
@@ -1743,7 +1949,7 @@ def get_evaluation_info():
                     "appId": 1483416585,
                     "appAk": "uiuj6hZY5HUrlFej1deMUAKM",
                     "appSk": "Imvaecl8UrUPTMOyFSraxpt1IpkGFTCp",
-                    "apiName": "ERNIE-Bot",
+                    "apiName": "ERNIE-3.5-8K",
                     "apiUrl": "/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions",
                     "prompt": {
                         "templateName": " 裁判员模型打分模板（含参考答案）",
@@ -1918,7 +2124,7 @@ def get_mock_eval_resul():
     sio.writelines(
         [
             (
-                '[{"模型名称": "ERNIE-Bot-turbo", "模型版本": "ERNIE-Bot-turbo-0922",'
+                '[{"模型名称": "ERNIE-Lite-8K", "模型版本": "ERNIE-Lite-8K",'
                 ' "Prompt问题": "请根据下面的新闻生成摘要, 内容如下：周末采摘杨桃助农，'
                 "游玩澄迈养生农庄自驾活动，快来报名~1月31日早上8点半出发哦，"
                 "前往澄迈杨桃园采摘，入园免费，"
@@ -1977,47 +2183,36 @@ def evaluable_model_list():
             "log_id": "2347238209",
             "result": [
                 {
-                    "modelId": 8,
-                    "modelIdStr": "am-ay2k0r83q9qr",
-                    "modelName": "ERNIE-Bot-turbo",
+                    "modelId": 2,
+                    "modelIdStr": "am-ju3hi4ts39u9",
+                    "modelName": "ERNIE Lite",
                     "source": "PlatformPreset",
                     "modelType": 0,
-                    "trainType": "ernieBotLite",
+                    "trainType": "",
                     "modelVersionList": [
                         {
-                            "modelVersionId": 600,
-                            "modelVersionIdStr": "amv-nsjesf9kasjt",
-                            "version": "ERNIE-Bot-turbo-0922",
+                            "modelVersionId": 26382,
+                            "modelVersionIdStr": "amv-k8npfy0yz90r",
+                            "version": "ERNIE-Lite-128K-0419",
                             "sourceType": "PlatformPreset",
                             "framework": "paddle",
-                            "algorithm": "ERNIE_EB-ERNIEBOT_V202_FUSE",
-                            "modelNet": "paddlepaddle-ERNIE_EB-ERNIEBOT_V202_LORA_FUSE",
-                            "trainType": "ernieBotLite",
-                            "description": "通过数据和策略迭代，提升模型生成效果。",
+                            "algorithm": "ERNIE_EB-ERNIEBOT_LITE_128K",
+                            "modelNet": "paddlepaddle-ERNIE_EB-ERNIEBOT_LITE_128K",
+                            "trainType": "",
+                            "description": "2024年4月19日发布版本，优化模型效果，支持128K上下文长度",
                         },
                         {
-                            "modelVersionId": 492,
-                            "modelVersionIdStr": "amv-4u0rw8juur1p",
-                            "version": "ERNIE-Bot-turbo-0725",
+                            "modelVersionId": 19879,
+                            "modelVersionIdStr": "amv-irrrsmxabb6r",
+                            "version": "ERNIE-Lite-8K-0308",
                             "sourceType": "PlatformPreset",
                             "framework": "paddle",
-                            "algorithm": "ERNIE_EB-ERNIEBOT_V201_8K",
-                            "modelNet": "paddlepaddle-ERNIE_EB-ERNIEBOT_V201_8K",
-                            "trainType": "ernieBotLite",
+                            "algorithm": "ERNIE_EB-ERNIEBOT_LITE_8K",
+                            "modelNet": "paddlepaddle-ERNIE_EB-ERNIEBOT_LITE_8K",
+                            "trainType": "ernieBotLite-8k",
                             "description": (
-                                "支持7K输入+1K输出，支持系统设置，新增推理参数"
+                                "2024年3月8日发布版本，优化模型效果，支持8K上下文长度"
                             ),
-                        },
-                        {
-                            "modelVersionId": 244,
-                            "modelVersionIdStr": "amv-70ahikpspjqs",
-                            "version": "ERNIE-Bot-turbo-0704",
-                            "sourceType": "PlatformPreset",
-                            "framework": "paddle",
-                            "algorithm": "ERNIE_EB-ERNIEBOT_V200",
-                            "modelNet": "paddlepaddle-ERNIE_EB-ERNIEBOT_V200",
-                            "trainType": "ernieBotLite",
-                            "description": "优化推理效果，修复部分问题",
                         },
                     ],
                 },
@@ -3258,7 +3453,7 @@ def get_dataset_aug_task_list():
                         "failReason": "对象存储访问异常",
                         "isSelfInstruct": True,
                         "name": "3334",
-                        "modelName": "ERNIE-Bot",
+                        "modelName": "ERNIE-3.5-8K",
                     },
                     {
                         "id": 240,
@@ -3276,7 +3471,7 @@ def get_dataset_aug_task_list():
                         "failReason": "",
                         "isSelfInstruct": True,
                         "name": "357",
-                        "modelName": "ERNIE-Bot",
+                        "modelName": "ERNIE-3.5-8K",
                     },
                 ],
             },

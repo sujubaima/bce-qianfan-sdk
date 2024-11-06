@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import hashlib
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from typing_extensions import deprecated
 
@@ -20,7 +21,7 @@ from qianfan.consts import DefaultValue, Env
 from qianfan.utils.pydantic import BaseSettings, Field
 
 
-class GlobalConfig(BaseSettings):
+class Config(BaseSettings):
     """
     The global config of whole qianfan sdk
     """
@@ -35,14 +36,23 @@ class GlobalConfig(BaseSettings):
     ACCESS_KEY: Optional[str] = Field(default=None)
     SECRET_KEY: Optional[str] = Field(default=None)
     ACCESS_TOKEN: Optional[str] = Field(default=None)
+    BEARER_TOKEN: Optional[str] = Field(default=None)
+    APP_ID: Optional[str] = Field(default=None)
     BASE_URL: str = Field(default=DefaultValue.BaseURL)
+    NO_AUTH: bool = Field(default=False)
+    USE_CUSTOM_ENDPOINT: bool = Field(default=False)
+    MODEL_API_PREFIX: str = Field(default=DefaultValue.ModelAPIPrefix)
     AUTH_TIMEOUT: float = Field(default=DefaultValue.AuthTimeout)
     DISABLE_EB_SDK: bool = Field(default=DefaultValue.DisableErnieBotSDK)
     EB_SDK_INSTALLED: bool = Field(default=False)
     IAM_SIGN_EXPIRATION_SEC: int = Field(default=DefaultValue.IAMSignExpirationSeconds)
     CONSOLE_API_BASE_URL: str = Field(default=DefaultValue.ConsoleAPIBaseURL)
+    IAM_BASE_URL: str = Field(default=DefaultValue.IAMBaseURL)
     ACCESS_TOKEN_REFRESH_MIN_INTERVAL: float = Field(
         default=DefaultValue.AccessTokenRefreshMinInterval
+    )
+    BEARER_TOKEN_EXPIRED_INTERVAL: int = Field(
+        default=DefaultValue.BearerTokenExpiredInterval
     )
     INFER_RESOURCE_REFRESH_INTERVAL: float = Field(
         default=DefaultValue.InferResourceRefreshMinInterval
@@ -127,16 +137,28 @@ class GlobalConfig(BaseSettings):
     # 缓存文件路径配置
     DISABLE_CACHE: bool = Field(default=DefaultValue.DisableCache)
     CACHE_DIR: str = Field(default=DefaultValue.CacheDir)
+    CHAT_V2_API_ROUTE: str = Field(default=DefaultValue.ChatV2ApiRoute)
+
+    def auth_key(self) -> str:
+        auth_keys = (
+            f"{self.AK}:{self.SK}:{self.ACCESS_KEY}:{self.SECRET_KEY}:"
+            f"{self.ACCESS_TOKEN}:{self.BEARER_TOKEN}:{self.ACCESS_CODE}"
+        )
+        md5_hash = hashlib.md5(auth_keys.encode(encoding=encoding()))
+        return md5_hash.hexdigest()[:24]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name.upper(), value)
 
 
-_GLOBAL_CONFIG: Optional[GlobalConfig] = None
+_GLOBAL_CONFIG: Optional[Config] = None
 
 
-def get_config() -> GlobalConfig:
+def get_config() -> Config:
     global _GLOBAL_CONFIG
     if not _GLOBAL_CONFIG:
         try:
-            _GLOBAL_CONFIG = GlobalConfig(  # type: ignore
+            _GLOBAL_CONFIG = Config(  # type: ignore
                 _env_file=os.getenv(Env.DotEnvConfigFile, DefaultValue.DotEnvConfigFile)
             )
         except Exception as e:
@@ -144,6 +166,26 @@ def get_config() -> GlobalConfig:
             # logger.error(f"unexpected error: {e}")
             raise e
     return _GLOBAL_CONFIG
+
+
+def get_config_with_kwargs(**kwargs: Any) -> Config:
+    cfg = get_config()
+
+    assert isinstance(kwargs, dict)
+
+    upper_kwargs: Dict[str, Any] = {}
+    cfg_key = cfg.dict().keys()
+
+    for k, v in kwargs.items():
+        upper_key = k.upper()
+        if upper_key in cfg_key:
+            upper_kwargs[upper_key] = v
+
+    return Config.parse_obj({**cfg.dict(), **upper_kwargs})
+
+
+# 兼容之前版本
+GlobalConfig = Config
 
 
 @deprecated(

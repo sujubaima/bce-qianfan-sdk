@@ -145,7 +145,7 @@ func (c *Completion) do(ctx context.Context, request *CompletionRequest) (*Model
 		if err != nil {
 			return nil, err
 		}
-		req, err := newModelRequest("POST", url, request)
+		req, err := NewModelRequest("POST", url, request)
 		if err != nil {
 			return nil, err
 		}
@@ -195,7 +195,7 @@ func (c *Completion) stream(ctx context.Context, request *CompletionRequest) (*M
 			return nil, err
 		}
 		request.SetStream()
-		req, err := newModelRequest("POST", url, request)
+		req, err := NewModelRequest("POST", url, request)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +226,7 @@ func (c *Completion) stream(ctx context.Context, request *CompletionRequest) (*M
 //
 //	// 可以通过 WithModel 指定模型
 //	completion := qianfan.NewCompletion(
-//	    qianfan.WithModel("ERNIE-Bot-4"),
+//	    qianfan.WithModel("ERNIE-4.0-8K"),
 //	    // 支持的模型可以通过 completion.ModelList() 获取
 //	)
 //	// 或者通过 WithEndpoint 指定 endpoint

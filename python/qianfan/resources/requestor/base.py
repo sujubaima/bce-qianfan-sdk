@@ -43,10 +43,11 @@ from tenacity import (
 )
 
 import qianfan.errors as errors
-from qianfan.config import get_config
-from qianfan.resources.auth.oauth import _masked_ak
+from qianfan.config import Config, get_config
+from qianfan.resources.auth.oauth import Auth, _masked_ak
 from qianfan.resources.http_client import HTTPClient
-from qianfan.resources.rate_limiter import VersatileRateLimiter
+from qianfan.resources.rate_limiter.rate_limiter import VersatileRateLimiter
+from qianfan.resources.rate_limiter.redis_rate_limiter import RedisRateLimiter
 from qianfan.resources.typing import QfRequest, QfResponse, RetryConfig
 from qianfan.utils.logging import log_error, log_trace, log_warn
 
@@ -77,12 +78,12 @@ def _get_body_str(byte_str: Optional[Union[bytes, str]]) -> Optional[Union[bytes
     return str(byte_str, encoding="utf8")
 
 
-def _check_if_status_code_is_200(response: requests.Response) -> None:
+def _check_if_status_code_is_200(response: requests.Response, config: Config) -> None:
     """
     check whether the status code of response is ok(200)
     if the status code is not 200, raise a `RequestError`
     """
-    if response.status_code != 200:
+    if response.status_code >= 300 or response.status_code < 200:
         failed_msg = (
             f"http request url {response.url} failed with http status code"
             f" {response.status_code}\n"
@@ -103,7 +104,7 @@ def _check_if_status_code_is_200(response: requests.Response) -> None:
         possible_reason = ""
         x_err_msg = response.headers.get("X-Bce-Error-Message", "")
         if x_err_msg == "NotFound, cause: Could not find credential.":
-            access_key = get_config().ACCESS_KEY
+            access_key = config.ACCESS_KEY
             if access_key:
                 possible_reason = f"Access Key(`{_masked_ak(access_key)}`) 错误"
             else:
@@ -113,7 +114,7 @@ def _check_if_status_code_is_200(response: requests.Response) -> None:
             == "SignatureDoesNotMatch, cause: Fail to authn user: Signature does not"
             " match"
         ):
-            secret_key = get_config().SECRET_KEY
+            secret_key = config.SECRET_KEY
             if secret_key:
                 possible_reason = f"Secret Key(`{_masked_ak(secret_key)}`) 错误"
             else:
@@ -131,7 +132,12 @@ def _check_if_status_code_is_200(response: requests.Response) -> None:
         )
 
         log_error(failed_msg)
-        raise errors.RequestError(failed_msg)
+        raise errors.RequestError(
+            failed_msg,
+            body=request_body,
+            headers=response.headers,
+            status_code=response.status_code,
+        )
 
 
 def _async_check_if_status_code_is_200(response: aiohttp.ClientResponse) -> None:
@@ -163,6 +169,16 @@ def _with_latency(func: Callable) -> Callable:
     raise errors.InternalError()
 
 
+_COMPLETION_TOKENS_FIELD = "completion_tokens"
+
+
+def _get_rate_limit_key(requestor: Any, request: QfRequest) -> str:
+    assert isinstance(requestor, BaseAPIRequestor)
+    ch = requestor._auth.credential_hash()
+    url = request.url
+    return f"{ch}_{url}"
+
+
 def _latency(func: Callable[..., QfResponse]) -> Callable[..., QfResponse]:
     """
     a decorator to add latency info into response
@@ -173,10 +189,20 @@ def _latency(func: Callable[..., QfResponse]) -> Callable[..., QfResponse]:
         requestor: Any, request: QfRequest, *args: Any, **kwargs: Any
     ) -> QfResponse:
         log_trace(f"raw request: {request}")
-        with requestor._rate_limiter:
+        key = _get_rate_limit_key(requestor, request)
+        if "key" in kwargs:
+            key = kwargs["key"]
+
+        with requestor._rate_limiter.acquire(key):
             start_time = time.perf_counter()
+            start_timestamp = int(time.time() * 1000)
             resp = func(requestor, request, *args, **kwargs)
             resp.statistic["total_latency"] = time.perf_counter() - start_time
+            resp.statistic["start_timestamp"] = start_timestamp
+            usage_tokens = resp.body.get("usage", {}).get(_COMPLETION_TOKENS_FIELD, 0)
+            resp.statistic["avg_output_tokens_per_second"] = (
+                usage_tokens / resp.statistic["total_latency"]
+            )
             return resp
 
     return wrapper
@@ -194,10 +220,20 @@ def _async_latency(
         requestor: Any, request: QfRequest, *args: Any, **kwargs: Any
     ) -> QfResponse:
         log_trace(f"raw request: {request}")
-        async with requestor._rate_limiter:
+        key = _get_rate_limit_key(requestor, request)
+        if "key" in kwargs:
+            key = kwargs["key"]
+
+        async with requestor._rate_limiter.acquire(key):
             start_time = time.perf_counter()
+            start_timestamp = int(time.time() * 1000)
             resp = await func(requestor, request, *args, **kwargs)
             resp.statistic["total_latency"] = time.perf_counter() - start_time
+            resp.statistic["start_timestamp"] = start_timestamp
+            usage_tokens = resp.body.get("usage", {}).get(_COMPLETION_TOKENS_FIELD, 0)
+            resp.statistic["avg_output_tokens_per_second"] = (
+                usage_tokens / resp.statistic["total_latency"]
+            )
             return resp
 
     return wrapper
@@ -214,8 +250,13 @@ def _stream_latency(
     def wrapper(
         requestor: Any, request: QfRequest, *args: Any, **kwargs: Any
     ) -> Iterator[QfResponse]:
-        with requestor._rate_limiter:
+        key = _get_rate_limit_key(requestor, request)
+        if "key" in kwargs:
+            key = kwargs["key"]
+
+        with requestor._rate_limiter.acquire(key):
             start_time = time.perf_counter()
+            start_timestamp = int(time.time() * 1000)
             resp = func(requestor, request, *args, **kwargs)
 
         def iter() -> Iterator[QfResponse]:
@@ -231,7 +272,13 @@ def _stream_latency(
                 is_first_block = False
 
                 r.statistic["total_latency"] = time.perf_counter() - start_time
+                r.statistic["start_timestamp"] = start_timestamp
                 sse_block_receive_time = time.perf_counter()
+                chunk_usage = r.body.get("usage", {}) or {}
+                usage_tokens = chunk_usage.get(_COMPLETION_TOKENS_FIELD, 0)
+                r.statistic["avg_output_tokens_per_second"] = (
+                    usage_tokens / r.statistic["total_latency"]
+                )
                 yield r
 
         return iter()
@@ -250,8 +297,13 @@ def _async_stream_latency(
     async def wrapper(
         requestor: Any, request: QfRequest, *args: Any, **kwargs: Any
     ) -> AsyncIterator[QfResponse]:
-        async with requestor._rate_limiter:
+        key = _get_rate_limit_key(requestor, request)
+        if "key" in kwargs:
+            key = kwargs["key"]
+
+        async with requestor._rate_limiter.acquire(key):
             start_time = time.perf_counter()
+            start_timestamp = int(time.time() * 1000)
             resp = await func(requestor, request, *args, **kwargs)
             first_token_latency = time.perf_counter() - start_time
 
@@ -271,7 +323,12 @@ def _async_stream_latency(
 
                 r.statistic["first_token_latency"] = first_token_latency
                 r.statistic["total_latency"] = time.perf_counter() - start_time
+                r.statistic["start_timestamp"] = start_timestamp
                 sse_block_receive_time = time.perf_counter()
+                usage_tokens = r.body.get("usage", {}).get(_COMPLETION_TOKENS_FIELD, 0)
+                r.statistic["avg_output_tokens_per_second"] = (
+                    usage_tokens / r.statistic["total_latency"]
+                )
                 yield r
 
         return iter()
@@ -289,7 +346,14 @@ class BaseAPIRequestor(object):
         `ak`, `sk` and `access_token` can be provided in kwargs.
         """
         self._client = HTTPClient(**kwargs)
-        self._rate_limiter = VersatileRateLimiter(**kwargs)
+        self._auth = Auth(**kwargs)
+        self._rate_limiter = (
+            VersatileRateLimiter(**kwargs)
+            if not kwargs.get("redis_rate_limiter", False)
+            else RedisRateLimiter(**kwargs)
+        )
+        self._host = kwargs.get("host")
+        self.config = kwargs.get("config", get_config())
 
     def _preprocess_request(self, request: QfRequest) -> QfRequest:
         return request
@@ -302,13 +366,17 @@ class BaseAPIRequestor(object):
         self,
         request: QfRequest,
         data_postprocess: Callable[[QfResponse], QfResponse] = lambda x: x,
+        check_error: Callable[
+            [requests.Response, Config], None
+        ] = _check_if_status_code_is_200,
     ) -> QfResponse:
         """
         simple sync request
         """
         request = self._preprocess_request(request)
         response = self._client.request(request)
-        _check_if_status_code_is_200(response)
+        check_error(response, self.config)
+        _check_if_status_code_is_200(response, self.config)
         try:
             body = response.json()
         except requests.JSONDecodeError:
@@ -319,6 +387,7 @@ class BaseAPIRequestor(object):
         resp.statistic["request_latency"] = response.elapsed.total_seconds()
         resp.request = QfRequest.from_requests(response.request)
         resp.request.json_body = copy.deepcopy(request.json_body)
+        resp.request.retry_config = request.retry_config
 
         if "X-Ratelimit-Limit-Requests" in resp.headers:
             self._rate_limiter.reset_once(
@@ -354,6 +423,7 @@ class BaseAPIRequestor(object):
                 resp.statistic["request_latency"] = request_latency
                 resp.request = QfRequest.from_aiohttp(response.request_info)
                 resp.request.json_body = copy.deepcopy(request.json_body)
+                resp.request.retry_config = request.retry_config
                 if "X-Ratelimit-Limit-Requests" in resp.headers:
                     await self._rate_limiter.async_reset_once(
                         float(resp.headers["X-Ratelimit-Limit-Requests"])
@@ -399,8 +469,12 @@ class BaseAPIRequestor(object):
         retry wrapper
         """
 
-        def predicate_api_err_code(result: Any) -> bool:
+        def predicate_api_err(result: Any) -> bool:
+            if config.retry_err_handler:
+                if config.retry_err_handler(result):
+                    return True
             if isinstance(result, errors.APIError):
+                # llm openapi error
                 if result.error_code in config.retry_err_codes:
                     log_warn(
                         f"got error code {result.error_code} from server, retrying... "
@@ -417,7 +491,7 @@ class BaseAPIRequestor(object):
                 jitter=config.jitter,
                 max=config.max_wait_interval,
             ),
-            retry=retry_if_exception(predicate_api_err_code),
+            retry=retry_if_exception(predicate_api_err),
             stop=stop_after_attempt(config.retry_count),
             reraise=True,
         )

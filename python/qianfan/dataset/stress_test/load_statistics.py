@@ -34,11 +34,14 @@ def get_statistics(path: str) -> List[float]:
             if line.startswith("Type"):
                 continue
             line_splits = line.split(",")
-            lat_avg = float(line_splits[5])
-            lat_min = float(line_splits[6])
-            lat_max = float(line_splits[7])
-            lat_50p = float(line_splits[4])
-            lat_80p = float(line_splits[-8])
+            lat_avg = -1.0 if line_splits[5] == "N/A" else float(line_splits[5])
+            lat_min = -1.0 if line_splits[6] == "N/A" else float(line_splits[6])
+            lat_max = -1.0 if line_splits[7] == "N/A" else float(line_splits[7])
+            lat_50p = -1.0 if line_splits[11] == "N/A" else float(line_splits[11])
+            lat_80p = -1.0 if line_splits[14] == "N/A" else float(line_splits[14])
+            lat_90p = -1.0 if line_splits[14] == "N/A" else float(line_splits[15])
+            lat_95p = -1.0 if line_splits[14] == "N/A" else float(line_splits[16])
+            lat_99p = -1.0 if line_splits[14] == "N/A" else float(line_splits[17])
             total_count = int(line_splits[2])
             failure_count = int(line_splits[3])
             total_time = float(line_splits[2]) * float(line_splits[5])
@@ -49,6 +52,9 @@ def get_statistics(path: str) -> List[float]:
         lat_max,
         lat_50p,
         lat_80p,
+        lat_90p,
+        lat_95p,
+        lat_99p,
         total_count,
         failure_count,
         total_time,
@@ -64,21 +70,32 @@ def gen_brief(
     spawn_rate: int,
     model_type: str,
     hyperparameters: Any,
-    total_requests: int,
 ) -> Dict[str, Any]:
     """
     gen_brief
     """
     qps = get_qps(report_dir + "/statistics_stats.csv")
-    lat_tuple = get_statistics(report_dir + "/statistics_stats.csv")
+    lat_tuple = get_statistics(report_dir + "/statistics_total_latency_stats.csv")
     first_lat_tuple = get_statistics(
         report_dir + "/statistics_first_token_latency_stats.csv"
     )
+    interval_lat_tuple = get_statistics(
+        report_dir + "/statistics_interval_latency_stats.csv"
+    )
     input_tk_tuple = get_statistics(report_dir + "/statistics_input_tokens_stats.csv")
     output_tk_tuple = get_statistics(report_dir + "/statistics_output_tokens_stats.csv")
-    total_count = get_statistics(report_dir + "/statistics_stats.csv")[5]
-    failure_count = get_statistics(report_dir + "/statistics_stats.csv")[6]
+    input_str_length_tuple = get_statistics(
+        report_dir + "/statistics_input_str_length_stats.csv"
+    )
+    output_str_length_tuple = get_statistics(
+        report_dir + "/statistics_output_str_length_stats.csv"
+    )
+    total_count = get_statistics(report_dir + "/statistics_stats.csv")[8]
+    failure_count = get_statistics(report_dir + "/statistics_stats.csv")[9]
     success_count = total_count - failure_count
+    success_rate = (
+        0 if total_count == 0 else round(success_count / total_count * 100, 2)
+    )
     text = (
         "Load Test Statistics\n"
         + "user_num: %s\n" % user_num
@@ -87,42 +104,101 @@ def gen_brief(
         + "model_type: %s\n" % model_type
         + "hyperparameters: %s\n" % hyperparameters
         + "QPS: %s\n" % round(qps, 2)
-        + "Latency Avg: %s\n" % round(lat_tuple[0] / 1000, 2)
-        + "Latency Min: %s\n" % round(lat_tuple[1] / 1000, 2)
-        + "Latency Max: %s\n" % round(lat_tuple[2] / 1000, 2)
-        + "Latency 50%%: %s\n" % round(lat_tuple[3] / 1000, 2)
-        + "Latency 80%%: %s\n" % round(lat_tuple[4] / 1000, 2)
-        + "FirstTokenLatency Avg: %s\n" % round(first_lat_tuple[0] / 1000, 2)
-        + "FirstTokenLatency Min: %s\n" % round(first_lat_tuple[1] / 1000, 2)
-        + "FirstTokenLatency Max: %s\n" % round(first_lat_tuple[2] / 1000, 2)
-        + "FirstTokenLatency 50%%: %s\n" % round(first_lat_tuple[3] / 1000, 2)
-        + "FirstTokenLatency 80%%: %s\n" % round(first_lat_tuple[4] / 1000, 2)
+        + "Latency Avg: %s\n" % round(lat_tuple[0] / 1000, 6)
+        + "Latency Min: %s\n" % round(lat_tuple[1] / 1000, 6)
+        + "Latency Max: %s\n" % round(lat_tuple[2] / 1000, 6)
+        + "Latency 50%%: %s\n" % round(lat_tuple[3] / 1000, 6)
+        + "Latency 80%%: %s\n" % round(lat_tuple[4] / 1000, 6)
+        + "Latency 90%%: %s\n" % round(lat_tuple[5] / 1000, 6)
+        + "Latency 95%%: %s\n" % round(lat_tuple[6] / 1000, 6)
+        + "Latency 99%%: %s\n" % round(lat_tuple[7] / 1000, 6)
+        + "FirstTokenLatency Avg: %s\n" % round(first_lat_tuple[0] / 1000, 6)
+        + "FirstTokenLatency Min: %s\n" % round(first_lat_tuple[1] / 1000, 6)
+        + "FirstTokenLatency Max: %s\n" % round(first_lat_tuple[2] / 1000, 6)
+        + "FirstTokenLatency 50%%: %s\n" % round(first_lat_tuple[3] / 1000, 6)
+        + "FirstTokenLatency 80%%: %s\n" % round(first_lat_tuple[4] / 1000, 6)
+        + "FirstTokenLatency 90%%: %s\n" % round(first_lat_tuple[5] / 1000, 6)
+        + "FirstTokenLatency 95%%: %s\n" % round(first_lat_tuple[6] / 1000, 6)
+        + "FirstTokenLatency 99%%: %s\n" % round(first_lat_tuple[7] / 1000, 6)
+        + "IntervalLatency Avg: %s\n" % round(interval_lat_tuple[0] / 1000, 6)
+        + "IntervalLatency Min: %s\n" % round(interval_lat_tuple[1] / 1000, 6)
+        + "IntervalLatency Max: %s\n" % round(interval_lat_tuple[2] / 1000, 6)
+        + "IntervalLatency 50%%: %s\n" % round(interval_lat_tuple[3] / 1000, 6)
+        + "IntervalLatency 80%%: %s\n" % round(interval_lat_tuple[4] / 1000, 6)
+        + "IntervalLatency 90%%: %s\n" % round(interval_lat_tuple[5] / 1000, 6)
+        + "IntervalLatency 95%%: %s\n" % round(interval_lat_tuple[6] / 1000, 6)
+        + "IntervalLatency 99%%: %s\n" % round(interval_lat_tuple[7] / 1000, 6)
         + "InputTokens Avg: %s\n" % round(input_tk_tuple[0], 2)
         + "OutputTokens Avg: %s\n" % round(output_tk_tuple[0], 2)
-        + "TotalInputTokens Avg: %s\n" % round(input_tk_tuple[0] * total_count, 2)
-        + "TotalOutputTokens Avg: %s\n" % round(output_tk_tuple[0] * success_count, 2)
-        + "TotalQuery: %s\n" % round(total_requests, 2)
+        + "TotalInputTokens: %s\n" % round(input_tk_tuple[0] * success_count, 2)
+        + "TotalOutputTokens: %s\n" % round(output_tk_tuple[0] * success_count, 2)
+        + "InputStringLength Avg :%s\n" % round(input_str_length_tuple[0], 2)
+        + "OutputStringLength Avg :%s\n" % round(output_str_length_tuple[0], 2)
+        + "TotalInputStringLength: %s\n"
+        % round(input_str_length_tuple[0] * success_count, 2)
+        + "TotalOutputStringLength: %s\n"
+        % round(output_str_length_tuple[0] * success_count, 2)
+        + "OutputTokensPerSecond: %s\n"
+        % (
+            round(output_tk_tuple[0] / (lat_tuple[0] / 1000), 2)
+            if lat_tuple[0] != 0
+            else 0
+        )
+        + "OutputStringLengthPerSecond: %s\n"
+        % (
+            round(output_str_length_tuple[0] / (lat_tuple[0] / 1000), 2)
+            if lat_tuple[0] != 0
+            else 0
+        )
+        + "SendQuery: %s\n" % round(total_count, 2)
         + "SuccessQuery: %s\n" % round(success_count, 2)
-        + "FailureQuery: %s\n" % round(total_requests - success_count, 2)
+        + "FailureQuery: %s\n" % round(failure_count, 2)
+        + "DataEntryCount: %s\n" % round(count, 2)
         + "TotalTime: %s\n" % round(time, 2)
-        + "SuccessRate: %s%%" % round(success_count / total_requests * 100, 2)
+        + "SuccessRate: %s%%" % success_rate
     )
     statistics = {
         "QPS": round(qps, 2),
-        "latency_avg": round(lat_tuple[0] / 1000, 2),
-        "latency_min": round(lat_tuple[1] / 1000, 2),
-        "latency_max": round(lat_tuple[2] / 1000, 2),
-        "latency_50%": round(lat_tuple[3] / 1000, 2),
-        "latency_80%": round(lat_tuple[4] / 1000, 2),
-        "FirstTokenLatency_avg": round(first_lat_tuple[0] / 1000, 2),
-        "FirstTokenLatency_min": round(first_lat_tuple[1] / 1000, 2),
-        "FirstTokenLatency_max": round(first_lat_tuple[2] / 1000, 2),
-        "FirstTokenLatency_50%": round(first_lat_tuple[3] / 1000, 2),
-        "FirstTokenLatency_80%": round(first_lat_tuple[4] / 1000, 2),
-        "Input_tokens_avg": round(input_tk_tuple[0], 2),
-        "Output_tokens_avg": round(output_tk_tuple[0], 2),
+        "latency_avg": round(lat_tuple[0] / 1000, 6),
+        "latency_min": round(lat_tuple[1] / 1000, 6),
+        "latency_max": round(lat_tuple[2] / 1000, 6),
+        "latency_50%": round(lat_tuple[3] / 1000, 6),
+        "latency_80%": round(lat_tuple[4] / 1000, 6),
+        "latency_90%": round(lat_tuple[5] / 1000, 6),
+        "latency_95%": round(lat_tuple[6] / 1000, 6),
+        "latency_99%": round(lat_tuple[7] / 1000, 6),
+        "FirstTokenLatency_avg": round(first_lat_tuple[0] / 1000, 6),
+        "FirstTokenLatency_min": round(first_lat_tuple[1] / 1000, 6),
+        "FirstTokenLatency_max": round(first_lat_tuple[2] / 1000, 6),
+        "FirstTokenLatency_50%": round(first_lat_tuple[3] / 1000, 6),
+        "FirstTokenLatency_80%": round(first_lat_tuple[4] / 1000, 6),
+        "FirstTokenLatency_90%": round(first_lat_tuple[5] / 1000, 6),
+        "FirstTokenLatency_95%": round(first_lat_tuple[6] / 1000, 6),
+        "FirstTokenLatency_99%": round(first_lat_tuple[7] / 1000, 6),
+        "IntervalLatency_avg": round(interval_lat_tuple[0] / 1000, 6),
+        "IntervalLatency_min": round(interval_lat_tuple[1] / 1000, 6),
+        "IntervalLatency_max": round(interval_lat_tuple[2] / 1000, 6),
+        "IntervalLatency_50%": round(interval_lat_tuple[3] / 1000, 6),
+        "IntervalLatency_80%": round(interval_lat_tuple[4] / 1000, 6),
+        "IntervalLatency_90%": round(interval_lat_tuple[5] / 1000, 6),
+        "IntervalLatency_95%": round(interval_lat_tuple[6] / 1000, 6),
+        "IntervalLatency_99%": round(interval_lat_tuple[7] / 1000, 6),
+        "InputTokens_avg": round(input_tk_tuple[0], 2),
+        "OutputTokens_avg": round(output_tk_tuple[0], 2),
+        "InputStringLength_avg": round(input_str_length_tuple[0], 2),
+        "OutputStringLength_avg": round(output_str_length_tuple[0], 2),
+        "OutputTokensPerSecond": (
+            round(output_tk_tuple[0] / (lat_tuple[0] / 1000), 2)
+            if lat_tuple[0] != 0
+            else 0
+        ),
+        "OutputStringLengthPerSecond": (
+            round(output_str_length_tuple[0] / (lat_tuple[0] / 1000), 2)
+            if lat_tuple[0] != 0
+            else 0
+        ),
         "TotalTime": round(time, 2),
-        "SuccessRate": round(success_count / total_requests * 100, 2),
+        "SuccessRate": success_rate,
         "concurrency": user_num,
     }
 
@@ -196,7 +272,7 @@ def generate_html_table(data_rows: Any, model_info: Any) -> str:
         
         <div class="info-section">
             <h2>Model Information</h2>
-            <p><strong>Model name:</strong> {model_info['modelname']}</p>
+            <p><strong>Service name:</strong> {model_info['modelname']}</p>
             <p><strong>Model Version:</strong> {model_info['modelVersionId']}</p>
             <p><strong>serviceId:</strong> {model_info['serviceId']}</p>
             <p><strong>serviceUrl:</strong> {model_info['serviceUrl']}</p>
@@ -230,13 +306,31 @@ def generate_html_table(data_rows: Any, model_info: Any) -> str:
         "Latency Max",
         "Latency 50",
         "Latency 80",
+        "Latency 90",
+        "Latency 95",
+        "Latency 99",
         "FirstTokenLatency Avg",
         "FirstTokenLatency Min",
         "FirstTokenLatency Max",
         "FirstTokenLatency 50",
         "FirstTokenLatency 80",
+        "FirstTokenLatency 90",
+        "FirstTokenLatency 95",
+        "FirstTokenLatency 99",
+        "IntervalLatency Avg",
+        "IntervalLatency Min",
+        "IntervalLatency Max",
+        "IntervalLatency 50",
+        "IntervalLatency 80",
+        "IntervalLatency 90",
+        "IntervalLatency 95",
+        "IntervalLatency 99",
         "InputTokens avg",
         "OutputTokens avg",
+        "InputStringLength avg",
+        "OutputStringLength avg",
+        "OutputTokensPerSecond",
+        "OutputStringLengthPerSecond",
         "SuccessRate",
     ]
 
@@ -266,6 +360,12 @@ def generate_html_table(data_rows: Any, model_info: Any) -> str:
                 value = row.get("latency_50%", "")
             elif column == "Latency 80":
                 value = row.get("latency_80%", "")
+            elif column == "Latency 90":
+                value = row.get("latency_90%", "")
+            elif column == "Latency 95":
+                value = row.get("latency_95%", "")
+            elif column == "Latency 99":
+                value = row.get("latency_99%", "")
             elif column == "FirstTokenLatency Avg":
                 value = row.get("FirstTokenLatency_avg", "")
             elif column == "FirstTokenLatency Min":
@@ -276,10 +376,40 @@ def generate_html_table(data_rows: Any, model_info: Any) -> str:
                 value = row.get("FirstTokenLatency_50%", "")
             elif column == "FirstTokenLatency 80":
                 value = row.get("FirstTokenLatency_80%", "")
+            elif column == "FirstTokenLatency 90":
+                value = row.get("FirstTokenLatency_90%", "")
+            elif column == "FirstTokenLatency 95":
+                value = row.get("FirstTokenLatency_95%", "")
+            elif column == "FirstTokenLatency 99":
+                value = row.get("FirstTokenLatency_99%", "")
+            elif column == "IntervalLatency Avg":
+                value = row.get("IntervalLatency_avg", "")
+            elif column == "IntervalLatency Min":
+                value = row.get("IntervalLatency_min", "")
+            elif column == "IntervalLatency Max":
+                value = row.get("IntervalLatency_max", "")
+            elif column == "IntervalLatency 50":
+                value = row.get("IntervalLatency_50%", "")
+            elif column == "IntervalLatency 80":
+                value = row.get("IntervalLatency_80%", "")
+            elif column == "IntervalLatency 90":
+                value = row.get("IntervalLatency_90%", "")
+            elif column == "IntervalLatency 95":
+                value = row.get("IntervalLatency_95%", "")
+            elif column == "IntervalLatency 99":
+                value = row.get("IntervalLatency_99%", "")
             elif column == "InputTokens avg":
-                value = row.get("Input_tokens_avg", "")
+                value = row.get("InputTokens_avg", "")
             elif column == "OutputTokens avg":
-                value = row.get("Output_tokens_avg", "")
+                value = row.get("OutputTokens_avg", "")
+            elif column == "InputStringLength avg":
+                value = row.get("InputStringLength_avg", "")
+            elif column == "OutputStringLength avg":
+                value = row.get("OutputStringLength_avg", "")
+            elif column == "OutputTokensPerSecond":
+                value = row.get("OutputTokensPerSecond", "")
+            elif column == "OutputStringLengthPerSecond":
+                value = row.get("OutputStringLengthPerSecond", "")
             elif column == "SuccessRate":
                 value = row.get("SuccessRate", "")
             else:

@@ -21,12 +21,13 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Tuple,
     Type,
     Union,
 )
 
 import qianfan.errors as errors
-from qianfan.consts import Consts, DefaultLLMModel, DefaultValue
+from qianfan.consts import DefaultLLMModel, DefaultValue
 from qianfan.resources.llm.base import (
     UNSPECIFIED_MODEL,
     BaseResourceV1,
@@ -34,9 +35,15 @@ from qianfan.resources.llm.base import (
     BatchRequestFuture,
     VersionBase,
 )
+from qianfan.resources.llm.function import Function, FunctionV2
 from qianfan.resources.tools.tokenizer import Tokenizer
 from qianfan.resources.typing import JsonBody, QfLLMInfo, QfMessages, QfResponse, QfRole
-from qianfan.utils.logging import log_error, log_info
+from qianfan.resources.typing_client import (
+    Completion,
+    CompletionChunk,
+    CompletionStatistic,
+)
+from qianfan.utils.logging import log_error, log_info, log_warn
 
 
 class _ChatCompletionV1(BaseResourceV1):
@@ -44,18 +51,7 @@ class _ChatCompletionV1(BaseResourceV1):
     QianFan ChatCompletion is an agent for calling QianFan ChatCompletion API.
     """
 
-    @classmethod
-    def _supported_models(cls) -> Dict[str, QfLLMInfo]:
-        """
-        preset model services list of ChatCompletion
-
-        Args:
-            None
-
-        Returns:
-            a dict which key is preset model and value is the endpoint
-
-        """
+    def _local_models(self) -> Dict[str, QfLLMInfo]:
         info_list = {
             "ERNIE-4.0-8K-Latest": QfLLMInfo(
                 endpoint="/chat/ernie-4.0-8k-latest",
@@ -129,6 +125,54 @@ class _ChatCompletionV1(BaseResourceV1):
                 input_price_per_1k_tokens=0.12,
                 output_price_per_1k_tokens=0.12,
             ),
+            "ERNIE-4.0-Turbo-8K-Latest": QfLLMInfo(
+                endpoint="/chat/ernie-4.0-turbo-8k-latest",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "system",
+                    "stop",
+                    "enable_system_memory",
+                    "system_memory_id",
+                    "disable_search",
+                    "enable_citation",
+                    "enable_trace",
+                    "max_output_tokens",
+                    "response_format",
+                },
+                max_input_chars=20000,
+                max_input_tokens=5120,
+                input_price_per_1k_tokens=0.02,
+                output_price_per_1k_tokens=0.06,
+            ),
+            "ERNIE-4.0-Turbo-8K-Preview": QfLLMInfo(
+                endpoint="/chat/ernie-4.0-turbo-8k-preview",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "system",
+                    "stop",
+                    "enable_system_memory",
+                    "system_memory_id",
+                    "disable_search",
+                    "enable_citation",
+                    "enable_trace",
+                    "max_output_tokens",
+                    "response_format",
+                },
+                max_input_chars=20000,
+                max_input_tokens=5120,
+                input_price_per_1k_tokens=0.02,
+                output_price_per_1k_tokens=0.06,
+            ),
             "ERNIE-Lite-AppBuilder-8K-0614": QfLLMInfo(
                 endpoint="/chat/ai_apaas_lite",
                 required_keys={"messages"},
@@ -150,6 +194,32 @@ class _ChatCompletionV1(BaseResourceV1):
                 max_input_tokens=7168,
                 input_price_per_1k_tokens=0.004,
                 output_price_per_1k_tokens=0.008,
+            ),
+            "ERNIE-3.5-8K-0701": QfLLMInfo(
+                endpoint="/chat/ernie-3.5-8k-0701",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "system",
+                    "stop",
+                    "enable_system_memory",
+                    "system_memory_id",
+                    "disable_search",
+                    "enable_citation",
+                    "enable_trace",
+                    "max_output_tokens",
+                    "response_format",
+                    "functions",
+                    "tool_choice",
+                },
+                max_input_chars=20000,
+                max_input_tokens=5120,
+                input_price_per_1k_tokens=0.12,
+                output_price_per_1k_tokens=0.12,
             ),
             "ERNIE-3.5-8K-0613": QfLLMInfo(
                 endpoint="/chat/ernie-3.5-8k-0613",
@@ -177,6 +247,25 @@ class _ChatCompletionV1(BaseResourceV1):
                 input_price_per_1k_tokens=0.012,
                 output_price_per_1k_tokens=0.012,
             ),
+            "ERNIE-Lite-Pro-8K": QfLLMInfo(
+                endpoint="/chat/ernie-lite-pro-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "tools",
+                    "tool_choice",
+                    "system",
+                    "stop",
+                },
+                max_input_chars=24000,
+                max_input_tokens=6144,
+                input_price_per_1k_tokens=0.008,
+                output_price_per_1k_tokens=0.008,
+            ),
             "ERNIE-Lite-8K-0922": QfLLMInfo(
                 endpoint="/chat/eb-instant",
                 required_keys={"messages"},
@@ -198,6 +287,27 @@ class _ChatCompletionV1(BaseResourceV1):
             ),
             "ERNIE-Lite-8K-0308": QfLLMInfo(
                 endpoint="/chat/ernie-lite-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "system",
+                    "stop",
+                    "max_output_tokens",
+                    "min_output_tokens",
+                    "frequency_penalty",
+                    "presence_penalty",
+                },
+                max_input_chars=11200,
+                max_input_tokens=7168,
+                input_price_per_1k_tokens=0.003,
+                output_price_per_1k_tokens=0.006,
+            ),
+            "ERNIE-Lite-V": QfLLMInfo(
+                endpoint="/chat/ernie-lite-v",
                 required_keys={"messages"},
                 optional_keys={
                     "stream",
@@ -477,6 +587,29 @@ class _ChatCompletionV1(BaseResourceV1):
                 input_price_per_1k_tokens=0.012,
                 output_price_per_1k_tokens=0.012,
             ),
+            "ERNIE-Speed-Pro-8K": QfLLMInfo(
+                endpoint="/chat/ernie-speed-pro-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "tools",
+                    "tool_choice",
+                    "system",
+                    "stop",
+                    "max_output_tokens",
+                    "min_output_tokens",
+                    "frequency_penalty",
+                    "presence_penalty",
+                },
+                max_input_chars=24000,
+                max_input_tokens=6144,
+                input_price_per_1k_tokens=0.004,
+                output_price_per_1k_tokens=0.008,
+            ),
             "ERNIE-Speed-8K": QfLLMInfo(
                 endpoint="/chat/ernie_speed",
                 required_keys={"messages"},
@@ -497,6 +630,28 @@ class _ChatCompletionV1(BaseResourceV1):
                 },
                 max_input_chars=11200,
                 max_input_tokens=7168,
+                input_price_per_1k_tokens=0.004,
+                output_price_per_1k_tokens=0.008,
+            ),
+            "ERNIE-Speed-Pro-128K": QfLLMInfo(
+                endpoint="/chat/ernie-speed-pro-128k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "tools",
+                    "tool_choice",
+                    "system",
+                    "stop",
+                    "max_output_tokens",
+                    "frequency_penalty",
+                    "presence_penalty",
+                },
+                max_input_chars=516096,
+                max_input_tokens=126976,
                 input_price_per_1k_tokens=0.004,
                 output_price_per_1k_tokens=0.008,
             ),
@@ -563,6 +718,31 @@ class _ChatCompletionV1(BaseResourceV1):
                 input_price_per_1k_tokens=0.001,
                 output_price_per_1k_tokens=0.001,
             ),
+            "ERNIE-Novel-8K": QfLLMInfo(
+                endpoint="/chat/ernie-novel-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "user_id",
+                    "tools",
+                    "tool_choice",
+                    "system",
+                    "stop",
+                    "enable_system_memory",
+                    "system_memory_id",
+                    "max_output_tokens",
+                    "min_output_tokens",
+                    "frequency_penalty",
+                    "presence_penalty",
+                },
+                max_input_chars=24000,
+                max_input_tokens=6144,
+                input_price_per_1k_tokens=0.001,
+                output_price_per_1k_tokens=0.001,
+            ),
             "ERNIE-Function-8K": QfLLMInfo(
                 endpoint="/chat/ernie-func-8k",
                 required_keys={"messages"},
@@ -580,6 +760,30 @@ class _ChatCompletionV1(BaseResourceV1):
                 max_input_tokens=6144,
                 input_price_per_1k_tokens=0.004,
                 output_price_per_1k_tokens=0.008,
+            ),
+            "Qianfan-Dynamic-8K": QfLLMInfo(
+                endpoint="/chat/qianfan-dynamic-8k",
+                required_keys={"messages"},
+                optional_keys={
+                    "stream",
+                    "temperature",
+                    "top_p",
+                    "penalty_score",
+                    "system",
+                    "user_id",
+                    "stop",
+                    "max_output_tokens",
+                    "response_format",
+                    "disable_search",
+                    "enable_citation",
+                    "enable_trace",
+                    "functions",
+                    "tool_choice",
+                },
+                max_input_chars=20000,
+                max_input_tokens=5120,
+                input_price_per_1k_tokens=0.012,
+                output_price_per_1k_tokens=0.012,
             ),
             "ERNIE-Character-8K": QfLLMInfo(
                 endpoint="/chat/ernie-char-8k",
@@ -944,14 +1148,8 @@ class _ChatCompletionV1(BaseResourceV1):
                 optional_keys=set(),
             ),
         }
-        # 获取最新的模型列表
-        latest_models_list = super()._supported_models()
-        for m in latest_models_list:
-            if m not in info_list:
-                info_list[m] = latest_models_list[m]
-            else:
-                # 更新endpoint
-                info_list[m].endpoint = latest_models_list[m].endpoint
+
+        # 处理历史模型名称/别名
         alias = {
             "ERNIE-Speed": "ERNIE-Speed-8K",
             "ERNIE Speed": "ERNIE-Speed-8K",
@@ -972,15 +1170,10 @@ class _ChatCompletionV1(BaseResourceV1):
             "ERNIE-Bot-turbo-AI": "ERNIE Speed-AppBuilder",
         }
 
-        # for m in info_list:
-        #     if m not in latest_models_list.keys():
-        #         info_list[m].deprecated = True
-
         for src, target in deprecated_alias.items():
             info = copy.deepcopy(info_list[target])
             info.deprecated = True
             info_list[src] = info
-
         return info_list
 
     @classmethod
@@ -1406,7 +1599,7 @@ class _ChatCompletionV1(BaseResourceV1):
 
         # 非默认模型
         if model_info is None:
-            model_info = self._supported_models()[UNSPECIFIED_MODEL]
+            model_info = self._self_supported_models()[UNSPECIFIED_MODEL]
 
         if model_info.max_input_chars is not None:
             chars_limit = model_info.max_input_chars
@@ -1470,7 +1663,7 @@ class _ChatCompletionV2(BaseResourceV2):
         return "chat"
 
     def _api_path(self) -> str:
-        return Consts.ChatV2API
+        return self.config.CHAT_V2_API_ROUTE
 
     def do(
         self,
@@ -1537,10 +1730,30 @@ class ChatCompletion(VersionBase):
     _real: Union[_ChatCompletionV1, _ChatCompletionV2]
 
     @classmethod
-    def _real_base(cls, version: str) -> Type:
+    def _real_base(cls, version: str, **kwargs: Any) -> Type:
         if version == "1":
+            # convert to qianfan.Function, only for api v1
+            if kwargs.get("use_function"):
+                return Function
+            else:
+                model = kwargs.get("model") or ""
+                func_model_info_list = {
+                    k.lower(): v
+                    for k, v in Function(**kwargs)._self_supported_models().items()
+                }
+                func_model_info = func_model_info_list.get(model.lower())
+                if model and func_model_info:
+                    if func_model_info and func_model_info.endpoint:
+                        return Function
+                endpoint = kwargs.get("endpoint", "")
+                if endpoint:
+                    for m in func_model_info_list.values():
+                        if endpoint and m.endpoint == endpoint:
+                            return Function
             return _ChatCompletionV1
         elif version == "2":
+            if kwargs.get("use_function") or kwargs.get("model") == "ernie-func-8k":
+                return FunctionV2
             return _ChatCompletionV2
         raise errors.InvalidArgumentError("Invalid version")
 
@@ -1557,9 +1770,80 @@ class ChatCompletion(VersionBase):
         auto_concat_truncate: bool = False,
         truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
         truncate_overlong_msgs: bool = False,
+        adapt_openai_message_format: bool = False,
         **kwargs: Any,
     ) -> Union[QfResponse, Iterator[QfResponse]]:
-        return self._do(
+        """
+        Perform chat-based language generation using user-supplied messages.
+
+        Parameters:
+          messages (Union[List[Dict], QfMessages]):
+            A list of messages in the conversation including the one from system. Each
+            message should be a dictionary containing 'role' and 'content' keys,
+            representing the role (either 'user', or 'assistant') and content of the
+            message, respectively. Alternatively, you can provide a QfMessages object
+            for convenience.
+          model (Optional[str]):
+            The name or identifier of the language model to use. If not specified, the
+            default model is used(ERNIE-Lite-8K).
+          endpoint (Optional[str]):
+            The endpoint for making API requests. If not provided, the default endpoint
+            is used.
+          stream (bool):
+            If set to True, the responses are streamed back as an iterator. If False, a
+            single response is returned.
+          retry_count (int):
+            The number of times to retry the request in case of failure.
+          request_timeout (float):
+            The maximum time (in seconds) to wait for a response from the model.
+          backoff_factor (float):
+            A factor to increase the waiting time between retry attempts.
+          auto_concat_truncate (bool):
+            [Experimental] If set to True, continuously requesting will be run
+            until `is_truncated` is `False`. As a result, the entire reply will
+            be returned.
+            Cause this feature highly relies on the understanding ability of LLM,
+            Use it carefully.
+          truncated_continue_prompt (str):
+            [Experimental] The prompt to use when requesting more content for auto
+            truncated reply.
+          truncate_overlong_msgs (bool):
+            Whether to truncate overlong messages.
+          adapt_openai_message_format (bool):
+            whether to adapt openai message format, such as `system` default is False.
+          kwargs (Any):
+            Additional keyword arguments that can be passed to customize the request.
+
+        Additional parameters like `temperature` will vary depending on the model,
+        please refer to the API documentation. The additional parameters can be passed
+        as follows:
+
+        ```
+        ChatCompletion(version=2).do(messages = ..., temperature = 0.2, top_p = 0.5)
+        ```
+        """
+        if adapt_openai_message_format:
+            # todo more message format
+            system, messages = self._adapt_messages_format(messages)
+            if "system" not in kwargs and system:
+                kwargs["system"] = system
+        impl: Union[_ChatCompletionV1, _ChatCompletionV2, Function, FunctionV2] = (
+            self._real
+        )
+        try:
+            if model is not None or endpoint is not None:
+                # TODO兼容 v2调用ernie-func-8k
+                new_kwargs = self._real.config.dict()
+                new_kwargs.update(kwargs)
+                real_base_type = self._real_base(
+                    self._version, model=model, endpoint=endpoint, **new_kwargs
+                )
+                if real_base_type is Function:
+                    # 不影响ChatCompletion流程，兼容Function调用
+                    impl = real_base_type(**new_kwargs)
+        except Exception:
+            impl = self._real
+        return impl.do(
             messages=messages,
             endpoint=endpoint,
             model=model,
@@ -1587,9 +1871,80 @@ class ChatCompletion(VersionBase):
         auto_concat_truncate: bool = False,
         truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
         truncate_overlong_msgs: bool = False,
+        adapt_openai_message_format: bool = False,
         **kwargs: Any,
     ) -> Union[QfResponse, AsyncIterator[QfResponse]]:
-        return await self._ado(
+        """
+        Async perform chat-based language generation using user-supplied messages.
+
+        Parameters:
+          messages (Union[List[Dict], QfMessages]):
+            A list of messages in the conversation including the one from system. Each
+            message should be a dictionary containing 'role' and 'content' keys,
+            representing the role (either 'user', or 'assistant') and content of the
+            message, respectively. Alternatively, you can provide a QfMessages object
+            for convenience.
+          model (Optional[str]):
+            The name or identifier of the language model to use. If not specified, the
+            default model is used(ERNIE-Lite-8K).
+          endpoint (Optional[str]):
+            The endpoint for making API requests. If not provided, the default endpoint
+            is used.
+          stream (bool):
+            If set to True, the responses are streamed back as an iterator. If False,
+            a single response is returned.
+          retry_count (int):
+            The number of times to retry the request in case of failure.
+          request_timeout (float):
+            The maximum time (in seconds) to wait for a response from the model.
+          backoff_factor (float):
+            A factor to increase the waiting time between retry attempts.
+          auto_concat_truncate (bool):
+            [Experimental] If set to True, continuously requesting will be run
+            until `is_truncated` is `False`. As a result, the entire reply will
+            be returned.
+            Cause this feature highly relies on the understanding ability of LLM,
+            Use it carefully.
+          truncated_continue_prompt (str):
+            [Experimental] The prompt to use when requesting more content for auto
+            truncated reply.
+          truncate_overlong_msgs (bool):
+            Whether to truncate overlong messages.
+          adapt_openai_message_format (bool):
+            whether to adapt openai message format, such as `system` default is False.
+          kwargs (Any):
+            Additional keyword arguments that can be passed to customize the request.
+
+        Additional parameters like `temperature` will vary depending on the model,
+        please refer to the API documentation. The additional parameters can be passed
+        as follows:
+
+        ```
+        ChatCompletion().ado(messages = ..., temperature = 0.2, top_p = 0.5)
+        ```
+
+        """
+        if adapt_openai_message_format:
+            system, messages = self._adapt_messages_format(messages)
+            if "system" not in kwargs and system:
+                kwargs["system"] = system
+        impl: Union[_ChatCompletionV1, _ChatCompletionV2, Function, FunctionV2] = (
+            self._real
+        )
+        try:
+            if model is not None or endpoint is not None:
+                # TODO兼容 v2调用ernie-func-8k
+                new_kwargs = self._real.config.dict()
+                new_kwargs.update(kwargs)
+                real_base_type = self._real_base(
+                    self._version, model=model, endpoint=endpoint, **new_kwargs
+                )
+                if real_base_type is Function:
+                    # 不影响ChatCompletion流程，兼容Function调用
+                    impl = real_base_type(**kwargs)
+        except Exception:
+            impl = self._real
+        return await impl.ado(
             messages=messages,
             model=model,
             endpoint=endpoint,
@@ -1604,11 +1959,27 @@ class ChatCompletion(VersionBase):
             **kwargs,
         )
 
+    def _adapt_messages_format(
+        self, messages: Optional[Union[List[Dict], QfMessages]] = None
+    ) -> Tuple[str, List[Dict]]:
+        if messages is None:
+            return "", []
+        if isinstance(messages, QfMessages):
+            messages = messages._to_list()
+        system = ""
+        filtered_messages = []
+        for message in messages:
+            if message.get("role") == "system":
+                system += message.get("content", "")
+            else:
+                filtered_messages.append(message)  # 保留非 system 的 message
+        return system, filtered_messages
+
     def batch_do(
         self,
         messages_list: Optional[Union[List[List[Dict]], List[QfMessages]]] = None,
         body_list: Optional[List[Dict]] = None,
-        enable_reading_buffer: bool = False,
+        show_total_latency: bool = False,
         worker_num: Optional[int] = None,
         **kwargs: Any,
     ) -> BatchRequestFuture:
@@ -1625,7 +1996,7 @@ class ChatCompletion(VersionBase):
             List of body for `ChatCompletion.do`.
             Make sure you only take either `messages_list` or `body_list` as
             your argument. Default to None.
-          enable_reading_buffer: (bool):
+          show_total_latency: (bool):
             Whether auto reading all results in worker function, without any waiting
             in streaming request situation. Default to False.
           worker_num (Optional[int]):
@@ -1648,18 +2019,21 @@ class ChatCompletion(VersionBase):
 
         """
 
+        if "enable_reading_buffer" in kwargs:
+            log_warn(
+                "enable_reading_buffer has been deprecated, please use"
+                " show_total_latency instead"
+            )
+            if (
+                isinstance(kwargs["enable_reading_buffer"], bool)
+                and kwargs["enable_reading_buffer"]
+            ):
+                show_total_latency = True
+
         def worker(
             inner_func: Callable, **kwargs: Any
         ) -> Union[List[QfResponse], Iterator[QfResponse], QfResponse, Exception]:
-            r = inner_func(**kwargs)
-            if isinstance(r, (QfResponse, Exception)) or not enable_reading_buffer:
-                return r
-
-            result_list: List[QfResponse] = []
-            for resp in r:
-                result_list.append(resp)
-
-            return result_list
+            return inner_func(**kwargs, show_total_latency=show_total_latency)
 
         task_list: List[Callable]
 
@@ -1688,7 +2062,7 @@ class ChatCompletion(VersionBase):
         self,
         messages_list: Optional[Union[List[List[Dict]], List[QfMessages]]] = None,
         body_list: Optional[List[Dict]] = None,
-        enable_reading_buffer: bool = False,
+        show_total_latency: bool = False,
         worker_num: Optional[int] = None,
         **kwargs: Any,
     ) -> List[Union[QfResponse, AsyncIterator[QfResponse]]]:
@@ -1705,7 +2079,7 @@ class ChatCompletion(VersionBase):
             List of body for `ChatCompletion.do`.
             Make sure you only take either `messages_list` or `body_list` as
             your argument. Default to None.
-          enable_reading_buffer: (bool):
+          show_total_latency: (bool):
             Whether auto reading all results in worker function, without any waiting
             in streaming request situation. Default to False.
           worker_num (Optional[int]):
@@ -1723,20 +2097,24 @@ class ChatCompletion(VersionBase):
         ```
 
         """
+
+        if "enable_reading_buffer" in kwargs:
+            log_warn(
+                "enable_reading_buffer has been deprecated, please use"
+                " show_total_latency instead"
+            )
+            if (
+                isinstance(kwargs["enable_reading_buffer"], bool)
+                and kwargs["enable_reading_buffer"]
+            ):
+                show_total_latency = True
+
         task_list: List[Callable]
 
         async def worker(
             inner_func: Callable, **kwargs: Any
         ) -> Union[List[QfResponse], Iterator[QfResponse], QfResponse, Exception]:
-            r = await inner_func(**kwargs)
-            if isinstance(r, (QfResponse, Exception)) or not enable_reading_buffer:
-                return r
-
-            result_list: List[QfResponse] = []
-            async for resp in r:
-                result_list.append(resp)
-
-            return result_list
+            return await inner_func(**kwargs, show_total_latency=show_total_latency)
 
         if messages_list:
             task_list = [
@@ -1759,6 +2137,141 @@ class ChatCompletion(VersionBase):
 
         tasks = [task() for task in task_list]
         return await self._real._abatch_request(tasks, worker_num)
+
+    def create(
+        self,
+        messages: Union[List[Dict], QfMessages],
+        model: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        stream: bool = False,
+        retry_count: int = DefaultValue.RetryCount,
+        request_timeout: float = DefaultValue.RetryTimeout,
+        request_id: Optional[str] = None,
+        backoff_factor: float = DefaultValue.RetryBackoffFactor,
+        auto_concat_truncate: bool = False,
+        truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
+        truncate_overlong_msgs: bool = False,
+        **kwargs: Any,
+    ) -> Union[Completion, Iterator[CompletionChunk], QfResponse, Iterator[QfResponse]]:
+        if hasattr(self, "_with_raw_response") and self._with_raw_response:
+            raw = True
+        else:
+            raw = False
+        if self._version == "1" or raw:
+            return self.do(
+                messages=messages,
+                endpoint=endpoint,
+                model=model,
+                stream=stream,
+                retry_count=retry_count,
+                request_timeout=request_timeout,
+                request_id=request_id,
+                backoff_factor=backoff_factor,
+                auto_concat_truncate=auto_concat_truncate,
+                truncated_continue_prompt=truncated_continue_prompt,
+                truncate_overlong_msgs=truncate_overlong_msgs,
+                **kwargs,
+            )
+        resp = self.do(
+            messages=messages,
+            endpoint=endpoint,
+            model=model,
+            stream=stream,
+            retry_count=retry_count,
+            request_timeout=request_timeout,
+            request_id=request_id,
+            backoff_factor=backoff_factor,
+            auto_concat_truncate=auto_concat_truncate,
+            truncated_continue_prompt=truncated_continue_prompt,
+            truncate_overlong_msgs=truncate_overlong_msgs,
+            **kwargs,
+        )
+        if not stream:
+            assert isinstance(resp, QfResponse)
+            result = Completion.parse_obj(resp.body)
+            result.statistic = CompletionStatistic.parse_obj(resp.statistic)
+            return result
+        else:
+            assert isinstance(resp, Iterator)
+            return self._create_completion_stream(resp)
+
+    async def acreate(
+        self,
+        messages: Union[List[Dict], QfMessages],
+        model: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        stream: bool = False,
+        retry_count: int = DefaultValue.RetryCount,
+        request_timeout: float = DefaultValue.RetryTimeout,
+        request_id: Optional[str] = None,
+        backoff_factor: float = DefaultValue.RetryBackoffFactor,
+        auto_concat_truncate: bool = False,
+        truncated_continue_prompt: str = DefaultValue.TruncatedContinuePrompt,
+        truncate_overlong_msgs: bool = False,
+        **kwargs: Any,
+    ) -> Union[
+        Completion,
+        AsyncIterator[CompletionChunk],
+        QfResponse,
+        AsyncIterator[QfResponse],
+    ]:
+        if hasattr(self, "_with_raw_response") and self._with_raw_response:
+            raw = True
+        else:
+            raw = False
+        if self._version == "1" or raw:
+            return await self.ado(
+                messages=messages,
+                endpoint=endpoint,
+                model=model,
+                stream=stream,
+                retry_count=retry_count,
+                request_timeout=request_timeout,
+                request_id=request_id,
+                backoff_factor=backoff_factor,
+                auto_concat_truncate=auto_concat_truncate,
+                truncated_continue_prompt=truncated_continue_prompt,
+                truncate_overlong_msgs=truncate_overlong_msgs,
+                **kwargs,
+            )
+        resp = await self.ado(
+            messages=messages,
+            endpoint=endpoint,
+            model=model,
+            stream=stream,
+            retry_count=retry_count,
+            request_timeout=request_timeout,
+            request_id=request_id,
+            backoff_factor=backoff_factor,
+            auto_concat_truncate=auto_concat_truncate,
+            truncated_continue_prompt=truncated_continue_prompt,
+            truncate_overlong_msgs=truncate_overlong_msgs,
+            **kwargs,
+        )
+        if not stream:
+            assert isinstance(resp, QfResponse)
+            result = Completion.parse_obj(resp.body)
+            result.statistic = CompletionStatistic.parse_obj(resp.statistic)
+            return result
+        else:
+            assert isinstance(resp, AsyncIterator)
+            return self._acreate_completion_stream(resp)
+
+    def _create_completion_stream(
+        self, resp: Iterator[QfResponse]
+    ) -> Iterator[CompletionChunk]:
+        for r in resp:
+            result = CompletionChunk.parse_obj(r.body)
+            result.statistic = CompletionStatistic.parse_obj(r.statistic)
+            yield result
+
+    async def _acreate_completion_stream(
+        self, resp: AsyncIterator[QfResponse]
+    ) -> AsyncIterator[CompletionChunk]:
+        async for r in resp:
+            result = CompletionChunk.parse_obj(r.body)
+            result.statistic = CompletionStatistic.parse_obj(r.statistic)
+            yield result
 
     def _convert_v2_request_to_v1(self, request: Any) -> Any:
         # TODO: V2 model to V1 model

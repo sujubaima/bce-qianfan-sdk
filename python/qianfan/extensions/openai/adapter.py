@@ -15,12 +15,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, TypeVar, Union
 
 import qianfan
 from qianfan import QfResponse
+from qianfan.utils import log_debug
 
 _T = TypeVar("_T")
 OpenAIRequest = Dict[str, Any]
@@ -121,12 +123,15 @@ class OpenAIApdater(object):
         """
         Convert general arguments in OpenAI request to Qianfan request.
         """
-        qianfan_request = {}
+        qianfan_request = copy.deepcopy(openai_request)
 
         def add_if_exist(openai_key: str, qianfan_key: Optional[str] = None) -> None:
             qianfan_key = openai_key if qianfan_key is None else qianfan_key
             if openai_key in openai_request:
                 qianfan_request[qianfan_key] = openai_request[openai_key]
+            if qianfan_key is not None and qianfan_key != openai_key:
+                if openai_key in qianfan_request:
+                    del qianfan_request[openai_key]
 
         add_if_exist("max_tokens", "max_output_tokens")
         add_if_exist("response_format")
@@ -145,6 +150,7 @@ class OpenAIApdater(object):
             # [-2, 2] -> [-0.5, 0.5] -> [1, 2]
             penalty = penalty / 4 + 1.5
             qianfan_request["penalty_score"] = penalty
+            qianfan_request.pop("presence_penalty")
         if "temperature" in openai_request:
             temperature = openai_request["temperature"] / 2
             if temperature == 0:
@@ -175,6 +181,12 @@ class OpenAIApdater(object):
             if not isinstance(response_format, str):
                 response_format = response_format["type"]
             qianfan_request["response_format"] = response_format
+        if "stream_options" in openai_request:
+            stream_options = openai_request["stream_options"]
+            qianfan_request["stream"] = True
+            if not isinstance(stream_options, str):
+                stream_options = stream_options["include_usage"]
+            qianfan_request["stream_options"] = stream_options
         return qianfan_request
 
     def openai_chat_request_to_qianfan(
@@ -278,11 +290,21 @@ class OpenAIApdater(object):
                 },
                 "finish_reason": resp.get("finish_reason", "normal"),
             }
-            if "function_call" in resp:
-                if "function_call" in openai_request:
-                    choice["message"]["function_call"] = resp["function_call"]
-                if "tool_choice" in openai_request:
-                    choice["message"]["tool_calls"] = resp["function_call"]
+            if "function_call" in resp and (
+                "functions" in openai_request or "tools" in openai_request
+            ):
+                choice["message"]["tool_calls"] = [
+                    {
+                        "id": resp["function_call"]["name"],
+                        "type": "function",
+                        "function": resp["function_call"],
+                    }
+                ]
+
+                choice["message"]["content"] = None
+                choice["message"]["function_call"] = resp["function_call"]
+                choice["finish_reason"] = "tool_calls"
+
             resp_list.append(choice)
 
             completion_tokens += resp["usage"]["completion_tokens"]
@@ -384,7 +406,9 @@ class OpenAIApdater(object):
         Chat Wrapper API
         """
         stream = request.get("stream", False)
+        log_debug(f"recv openai request: {request}")
         qianfan_request = self.openai_chat_request_to_qianfan(request)
+        log_debug(f"convert to qianfan request: {qianfan_request}")
         n = request.get("n", 1)
         if stream:
             return self._chat_stream(n, request, qianfan_request)
@@ -446,6 +470,8 @@ class OpenAIApdater(object):
         tasks = [task(i) for i in range(n)]
         results = merge_async_iters(*tasks)
         base = None
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
         async for i, res in results:
             if base is None:
                 base = {
@@ -479,20 +505,41 @@ class OpenAIApdater(object):
                     ),
                 }
             ]
-            if "function_call" in res:
-                if "function_call" in openai_request:
-                    choices[0]["delta"]["function_call"] = res["function_call"]
-                if "tools" in openai_request:
-                    choices[0]["delta"]["tool_calls"] = [
-                        {
-                            "id": res["function_call"]["name"],
-                            "type": "function",
-                            "function": res["function_call"],
-                        }
-                    ]
+            if "function_call" in res and (
+                "functions" in openai_request or "tools" in openai_request
+            ):
+                choices[0]["delta"]["tool_calls"] = [
+                    {
+                        "index": 0,
+                        "id": res["function_call"]["name"],
+                        "type": "function",
+                        "function": res["function_call"],
+                    }
+                ]
+
+                choices[0]["delta"]["content"] = None
+                choices[0]["delta"]["finish_reason"] = "tool_calls"
+                choices[0]["delta"]["function_call"] = res["function_call"]
+
+            if res["is_end"] and "usage" in res:
+                total_prompt_tokens += res["usage"]["prompt_tokens"]
+                total_completion_tokens += res["usage"]["completion_tokens"]
 
             yield {
                 "choices": choices,
+                **base,
+            }
+
+        # 在流式响应结束后，添加usage信息
+        base = base or {}
+        if total_prompt_tokens > 0 or total_completion_tokens > 0:
+            yield {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": total_prompt_tokens,
+                    "completion_tokens": total_completion_tokens,
+                    "total_tokens": total_prompt_tokens + total_completion_tokens,
+                },
                 **base,
             }
 
@@ -514,13 +561,17 @@ class OpenAIApdater(object):
         base = None
         async for i, res in results:
             if base is None:
-                base = {
-                    "id": res["id"],
-                    "created": res["created"],
-                    "model": openai_request["model"],
-                    "system_fingerprint": "fp_?",
-                    "object": "text_completion",
-                }
+                base = (
+                    {
+                        "id": res["id"],
+                        "created": res["created"],
+                        "model": openai_request["model"],
+                        "system_fingerprint": "fp_?",
+                        "object": "text_completion",
+                    }
+                    if base is None
+                    else base
+                )
                 for j in range(n):
                     yield {
                         "choices": [

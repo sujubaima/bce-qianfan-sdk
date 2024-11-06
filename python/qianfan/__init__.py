@@ -29,7 +29,15 @@ from qianfan.fake_pyarrow_replacer import _ModuleFinder
 
 sys.meta_path.insert(0, _ModuleFinder())
 
-from qianfan.config import AK, SK, AccessKey, AccessToken, SecretKey, get_config
+from qianfan.config import (
+    AK,
+    SK,
+    AccessKey,
+    AccessToken,
+    SecretKey,
+    get_config,
+    get_config_with_kwargs,
+)
 from qianfan.resources import (
     ChatCompletion,
     Completion,
@@ -46,13 +54,14 @@ from qianfan.resources import (
 )
 from qianfan.utils import disable_log, enable_log
 from qianfan.version import VERSION
-
+from qianfan.client import Qianfan
 
 Role = QfRole
 Messages = QfMessages
 Response = QfResponse
 
 __all__ = [
+    "Qianfan",
     "ChatCompletion",
     "Embedding",
     "Completion",
@@ -70,7 +79,7 @@ __all__ = [
     "QfRole",
     "QfMessages",
     "QfResponse",
-    "AccessToken",
+    "Token",
     "AccessKey",
     "SecretKey",
     "get_config",

@@ -74,6 +74,7 @@ class Env:
     AuthTimeout: str = "QIANFAN_AUTH_TIMEOUT"
     IAMSignExpirationSeconds: str = "QIANFAN_IAM_SIGN_EXPIRATION_SEC"
     ConsoleAPIBaseURL: str = "QIANFAN_CONSOLE_API_BASE_URL"
+    IAMBaseURL: str = "QIANFAN_IAM_BASE_URL"
     AccessTokenRefreshMinInterval: str = "QIANFAN_ACCESS_TOKEN_REFRESH_MIN_INTERVAL"
     InferResourceRefreshMinInterval: str = "QIANFAN_INFER_RESOURCE_REFRESH_MIN_INTERVAL"
     EnablePrivate: str = "QIANFAN_ENABLE_PRIVATE"
@@ -103,82 +104,6 @@ class Env:
     SSLVerificationEnabled: str = "QIANFAN_SSL_VERIFICATION_ENABLED"
     Proxy: str = "QIANFAN_PROXY"
     FileEncoding: str = "QIANFAN_FILE_ENCODING"
-
-
-class DefaultValue:
-    """
-    Default value used by qianfan sdk
-    """
-
-    AK: str = ""
-    SK: str = ""
-    ConsoleAK: str = ""
-    ConsoleSK: str = ""
-    AccessToken: str = ""
-    BaseURL: str = "https://aip.baidubce.com"
-    AuthTimeout: float = 5
-    DisableErnieBotSDK: bool = True
-    IAMSignExpirationSeconds: int = 300
-    ConsoleAPIBaseURL: str = "https://qianfan.baidubce.com"
-    AccessTokenRefreshMinInterval: float = 3600
-    InferResourceRefreshMinInterval: float = 600
-    RetryCount: int = 3
-    RetryTimeout: float = 300
-    RetryBackoffFactor: float = 1
-    RetryJitter: float = 1
-    RetryMaxWaitInterval: float = 120
-    ConsoleRetryCount: int = 1
-    ConsoleRetryTimeout: float = 60
-    ConsoleRetryBackoffFactor: float = 0
-    ConsoleRetryJitter: int = 1
-    ConsoleRetryMaxWaitInterval: float = 120
-    ConsoleRetryErrCodes: Set = {
-        APIErrorCode.ServerHighLoad.value,
-        APIErrorCode.QPSLimitReached.value,
-        APIErrorCode.ConsoleInternalError.value,
-    }
-    QpsLimit: float = 0
-    RpmLimit: float = 0
-    TpmLimit: int = 0
-    DotEnvConfigFile: str = ".env"
-
-    EnablePrivate: bool = False
-    AccessCode: str = ""
-    TruncatedContinuePrompt = "继续"
-    ImportStatusPollingInterval: float = 2
-    ExportStatusPollingInterval: float = 2
-    ReleaseStatusPollingInterval: float = 2
-    ETLStatusPollingInterval: float = 2
-    TrainStatusPollingInterval: float = 30
-    TrainerStatusPollingBackoffFactor: float = 3
-    TrainerStatusPollingRetryTimes: float = 3
-    ModelPublishStatusPollingInterval: float = 30
-    BatchRunStatusPollingInterval: float = 30
-    DeployStatusPollingInterval: float = 30
-    DefaultFinetuneTrainType: str = "ERNIE-Speed"
-    V2InferApiDowngrade: bool = False
-
-    # 目前可直接下载到本地的千帆数据集解压后的大小上限
-    # 后期研究更换为用户机内存大小的上限
-    # 目前限制 2GB，防止用户内存爆炸
-    ExportFileSizeLimit: int = 1024 * 1024 * 1024 * 2
-    GetEntityContentFailedRetryTimes: int = 3
-
-    EvaluationOnlinePollingInterval: float = 30
-    BosHostRegion: str = "bj"
-    RetryErrCodes: Set = {
-        APIErrorCode.ServiceUnavailable.value,
-        APIErrorCode.ServerHighLoad.value,
-        APIErrorCode.QPSLimitReached.value,
-        APIErrorCode.RPMLimitReached.value,
-        APIErrorCode.TPMLimitReached.value,
-        APIErrorCode.AppNotExist.value,
-    }
-    SSLVerificationEnabled: bool = True
-    Proxy: str = ""
-    FileEncoding: str = "utf-8"
-    CacheDir: str = str(Path.home() / ".qianfan_cache")
-    DisableCache: bool = False
 
 
 class Consts:
@@ -253,6 +178,14 @@ class Consts:
         "/wenxinworkshop/modelrepo/eval/result/export/info"
     )
     ModelEvaluableModelListAPI: str = "/wenxinworkshop/modelrepo/eval/model/list"
+
+    ModelEvalV2API: str = "/v2/eval"
+    ModelEvalV2Create: str = "CreateEvalTask"
+    ModelEvalV2DescribeTasks: str = "DescribeEvalTasks"
+    ModelEvalV2DescribeTask: str = "DescribeEvalTask"
+    ModelEvalV2DescribeTaskReport: str = "DescribeEvalTaskReport"
+    ModelEvalV2DeleteTask: str = "DeleteEvalTask"
+
     ServiceCreateAPI: str = "/wenxinworkshop/service/apply"
     ServiceDetailAPI: str = "/wenxinworkshop/service/detail"
     ServiceListAPI: str = "/wenxinworkshop/service/list"
@@ -279,7 +212,21 @@ class Consts:
     DatasetV2OfflineBatchInferenceAPI: str = "/v2/batchinference"
     DatasetCreateOfflineBatchInferenceAction: str = "CreateBatchInferenceTask"
     DatasetDescribeOfflineBatchInferenceAction: str = "DescribeBatchInferenceTask"
+    DatasetStopOfflineBatchInferenceAction: str = "StopBatchInferenceTask"
     DatasetDescribeOfflineBatchInferencesAction: str = "DescribeBatchInferenceTasks"
+    DatasetV2BaseRouteAPI: str = "/v2/dataset"
+    DatasetV2CreateDatasetAction: str = "CreateDataset"
+    DatasetV2GetDatasetListAction: str = "DescribeDatasets"
+    DatasetV2DeleteDatasetAction: str = "DeleteDataset"
+    DatasetV2CreateDatasetVersionAction: str = "CreateDatasetVersion"
+    DatasetV2GetDatasetVersionInfoAction: str = "DescribeDatasetVersion"
+    DatasetV2DeleteDatasetVersionAction: str = "DeleteDatasetVersion"
+    DatasetV2PublishDatasetVersionAction: str = "PublishDatasetVersion"
+    DatasetV2GetDatasetVersionListAction: str = "DescribeDatasetVersions"
+    DatasetV2CreateDatasetVersionImportTaskAction: str = "CreateImportTask"
+    DatasetV2GetDatasetVersionImportTaskInfoAction: str = "DescribeImportTask"
+    DatasetV2CreateDatasetVersionExportTaskAction: str = "CreateExportTask"
+    DatasetV2GetDatasetVersionExportTaskInfoAction: str = "DescribeExportTask"
     PromptRenderAPI: str = "/rest/2.0/wenxinworkshop/api/v1/template/info"
     PromptCreateAPI: str = "/wenxinworkshop/prompt/template/create"
     PromptInfoAPI: str = "/wenxinworkshop/prompt/template/info"
@@ -308,16 +255,23 @@ class Consts:
     TpmCreditPurchaseQueryParam: str = "PurchaseTPMResource"
     TpmCreditInfoQueryParam: str = "DescribeTPMResource"
     TpmCreditStopQueryParam: str = "ReleaseTPMResource"
+    TpmCreditResizeTPMResourceParam: str = "ResizeTPMResource"
+    TpmCreditAutoReleaseTPMResourceParam: str = "AutoReleaseTPMResource"
 
     PrivateResourceAPI: str = "/v2/charge"
     PrivateResourcePurchaseParam: str = "PurchaseServiceResource"
-    PrivateResourceGetResourceListParam: str = "DescribeServiceResources"
-    PrivateResourceGetResourceParam: str = "DescribeServiceResource"
+    PrivateResourceGetResourceListParam: str = "DescribeComputeUnits"
+    PrivateResourceGetResourceParam: str = "DescribeComputeUnit"
+    PrivateResourceReleaseServiceResourceParam: str = "ReleaseComputeUnit"
+    PrivateResourceCreateAutoRenewRulesParam: str = "AutoReleaseComputeUnit"
+    PrivateResourceResizeComputeUnitParam: str = "ResizeComputeUnit"
 
-    ChatV2API: str = "/v2/chat"
+    ChatV2API: str = "/v2/chat/completions"
+    IAMBearerTokenAPI: str = "/v1/BCE-BEARER/token"
 
     STREAM_RESPONSE_PREFIX: str = "data: "
     STREAM_RESPONSE_EVENT_PREFIX: str = "event: "
+    V2_STREAM_RESPONSE_END_NOTE: str = "[DONE]"
     XRequestID: str = "Request_id"
     XResponseID: str = "X-Baidu-Request-Id"
     QianfanRequestIdDefaultPrefix: str = f"sdk-py-{VERSION}"
@@ -327,6 +281,86 @@ class Consts:
     QianfanLLMModelsListCacheKey = "qianfan_llm_models"
 
     DateTimeFormat = "%Y-%m-%dT%H:%M:%SZ"
+
+
+class DefaultValue:
+    """
+    Default value used by qianfan sdk
+    """
+
+    AK: str = ""
+    SK: str = ""
+    ConsoleAK: str = ""
+    ConsoleSK: str = ""
+    AccessToken: str = ""
+    BaseURL: str = "https://aip.baidubce.com"
+    ModelAPIPrefix: str = Consts.ModelAPIPrefix
+    AuthTimeout: float = 5
+    DisableErnieBotSDK: bool = True
+    IAMSignExpirationSeconds: int = 300
+    ConsoleAPIBaseURL: str = "https://qianfan.baidubce.com"
+    IAMBaseURL: str = "https://iam.bj.baidubce.com"
+    AccessTokenRefreshMinInterval: float = 3600
+    BearerTokenExpiredInterval: int = 43200
+    InferResourceRefreshMinInterval: float = 600
+    RetryCount: int = 3
+    RetryTimeout: float = 300
+    RetryBackoffFactor: float = 1
+    RetryJitter: float = 1
+    RetryMaxWaitInterval: float = 120
+    ConsoleRetryCount: int = 1
+    ConsoleRetryTimeout: float = 60
+    ConsoleRetryBackoffFactor: float = 0
+    ConsoleRetryJitter: int = 1
+    ConsoleRetryMaxWaitInterval: float = 120
+    ConsoleRetryErrCodes: Set = {
+        APIErrorCode.ServerHighLoad.value,
+        APIErrorCode.QPSLimitReached.value,
+        APIErrorCode.ConsoleInternalError.value,
+    }
+    QpsLimit: float = 0
+    RpmLimit: float = 0
+    TpmLimit: int = 0
+    DotEnvConfigFile: str = ".env"
+
+    EnablePrivate: bool = False
+    AccessCode: str = ""
+    TruncatedContinuePrompt = "继续"
+    ImportStatusPollingInterval: float = 2
+    ExportStatusPollingInterval: float = 2
+    ReleaseStatusPollingInterval: float = 2
+    ETLStatusPollingInterval: float = 2
+    TrainStatusPollingInterval: float = 30
+    TrainerStatusPollingBackoffFactor: float = 3
+    TrainerStatusPollingRetryTimes: float = 3
+    ModelPublishStatusPollingInterval: float = 30
+    BatchRunStatusPollingInterval: float = 30
+    DeployStatusPollingInterval: float = 30
+    DefaultFinetuneTrainType: str = "ERNIE-Speed"
+    V2InferApiDowngrade: bool = False
+
+    # 目前可直接下载到本地的千帆数据集解压后的大小上限
+    # 后期研究更换为用户机内存大小的上限
+    # 目前限制 2GB，防止用户内存爆炸
+    ExportFileSizeLimit: int = 1024 * 1024 * 1024 * 2
+    GetEntityContentFailedRetryTimes: int = 3
+
+    EvaluationOnlinePollingInterval: float = 30
+    BosHostRegion: str = "bj"
+    RetryErrCodes: Set = {
+        APIErrorCode.ServiceUnavailable.value,
+        APIErrorCode.ServerHighLoad.value,
+        APIErrorCode.QPSLimitReached.value,
+        APIErrorCode.RPMLimitReached.value,
+        APIErrorCode.TPMLimitReached.value,
+        APIErrorCode.AppNotExist.value,
+    }
+    SSLVerificationEnabled: bool = True
+    Proxy: str = ""
+    FileEncoding: str = "utf-8"
+    CacheDir: str = str(Path.home() / ".qianfan_cache")
+    DisableCache: bool = False
+    ChatV2ApiRoute: str = Consts.ChatV2API
 
 
 class DefaultLLMModel:

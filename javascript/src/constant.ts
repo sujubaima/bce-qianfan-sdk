@@ -26,6 +26,7 @@ export const DEFAULT_CONFIG: DefaultConfig = {
     QIANFAN_SECRET_KEY: '',
     QIANFAN_BASE_URL: 'https://aip.baidubce.com',
     QIANFAN_CONSOLE_API_BASE_URL: 'https://qianfan.baidubce.com',
+    QIANFAN_BEAR_TOKEN_URL: 'http://iam.bj.baidubce.com/v1/BCE-BEARER/token',
     QIANFAN_LLM_API_RETRY_TIMEOUT: '600000',
     QIANFAN_LLM_API_RETRY_BACKOFF_FACTOR: '0',
     QIANFAN_LLM_RETRY_MAX_WAIT_INTERVAL: '120000',
@@ -34,6 +35,7 @@ export const DEFAULT_CONFIG: DefaultConfig = {
     QIANFAN_RPM_LIMIT: '',
     QIANFAN_TPM_LIMIT: '',
     version: '1',
+    ENABLE_OAUTH: false,
 };
 
 export const RETRY_CODE = [

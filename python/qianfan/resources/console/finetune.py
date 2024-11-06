@@ -76,9 +76,9 @@ class FineTune(object):
           name (str):
             The name of the fine-tuning task.
           base_train_type (str):
-            The base training type of the fine-tuning task. e.g. "ERNIE-Bot-turbo"
+            The base training type of the fine-tuning task. e.g. "ERNIE-Speed-8K"
           train_type (str):
-            The training type of the fine-tuning task. e.g. "ERNIE-Bot-turbo-0922
+            The training type of the fine-tuning task. e.g. "ERNIE-Speed-8K
           description (Optional[str]):
             An optional description for the fine-tuning task.
           kwargs (Any):
@@ -176,6 +176,8 @@ class FineTune(object):
             model: str,
             train_mode: Union[str, console_consts.TrainMode],
             description: Optional[str] = None,
+            parameter_scale: Optional[str] = None,
+            hyper_parameter_config: Optional[Dict] = None,
             **kwargs: Any,
         ) -> QfRequest:
             """
@@ -195,6 +197,10 @@ class FineTune(object):
                 "PostPreTrain" and so on.
             description (Optional[str]):
                 The description of the fine-tuning job.
+            parameter_scale (Optional[str]):
+                the parameter scale for your fintune model
+             hyper_parameter_config (Optional[Dict]):
+                hyper parameter config
             kwargs:
                 Additional keyword arguments that can be passed to customize the
                 request.
@@ -222,6 +228,12 @@ class FineTune(object):
                 )
             if description is not None:
                 req.json_body["description"] = description
+
+            if parameter_scale is not None:
+                req.json_body["parameterScale"] = parameter_scale
+
+            if hyper_parameter_config is not None:
+                req.json_body["hyperParameterConfig"] = hyper_parameter_config
             return req
 
         @classmethod
@@ -230,8 +242,8 @@ class FineTune(object):
             cls,
             job_id: str,
             params_scale: Union[str, console_consts.TrainParameterScale],
-            hyper_params: Dict[str, Any],
-            dataset_config: Dict[str, Any],
+            hyper_params: Dict[str, Any] = {},
+            dataset_config: Optional[Dict[str, Any]] = None,
             increment_task_id: Optional[str] = None,
             increment_checkpoint_step: Optional[int] = None,
             model_config: Optional[Dict[str, Any]] = None,
@@ -278,6 +290,8 @@ class FineTune(object):
                 url=cls.base_api_route(),
                 query=_get_console_v2_query(Consts.FineTuneCreateTaskAction),
             )
+            if dataset_config is None:
+                raise ValueError("dataset_config cannot be empty")
             req.json_body = {
                 **kwargs,
                 "jobId": job_id,
@@ -309,6 +323,7 @@ class FineTune(object):
             marker: Optional[str] = None,
             max_keys: Optional[int] = None,
             page_reverse: Optional[bool] = None,
+            model: Optional[str] = None,
             **kwargs: Any,
         ) -> QfRequest:
             """
@@ -323,6 +338,8 @@ class FineTune(object):
                 max keys of the page.
             page_reverse: Optional[bool] = None,
                 page reverse or not.
+            model: Optional[str] = None
+                base model name, default to None
             kwargs:
                 Additional keyword arguments that can be passed to customize
                 the request.
@@ -345,9 +362,10 @@ class FineTune(object):
                         if isinstance(train_model, console_consts.TrainMode)
                         else train_model
                     ),
-                    "maker": marker,
+                    "marker": marker,
                     "maxKeys": max_keys,
                     "pageReverse": page_reverse,
+                    "model": model,
                 }.items()
                 if v is not None
             }
@@ -393,7 +411,7 @@ class FineTune(object):
                 for k, v in {
                     **kwargs,
                     "jobId": job_id,
-                    "maker": marker,
+                    "marker": marker,
                     "maxKeys": max_keys,
                     "pageReverse": page_reverse,
                 }.items()

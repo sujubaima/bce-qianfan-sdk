@@ -34,12 +34,10 @@ from qianfan.trainer.configs import (
     CorpusConfig,
     CorpusConfigItem,
     DatasetConfig,
-    DefaultDPOTrainConfigMapping,
-    DefaultPostPretrainTrainConfigMapping,
-    DefaultTrainConfigMapping,
     PeftType,
     TrainConfig,
     TrainLimit,
+    get_default_train_config,
     get_model_info,
 )
 from qianfan.trainer.consts import ServiceStatus, TrainStatus
@@ -84,11 +82,12 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
         ```
     """
 
-    datasets: List[DataSource] = []
+    datasets: List[Union[DataSource, Dict]] = []
     sampling_rates: List[float] = []
     result: Optional[Dict[str, Any]] = None
     eval_split_ratio: Optional[float] = None
     corpus_config: Optional[CorpusConfig] = None
+    source_type: Optional[console_consts.TrainDatasetSourceType] = None
 
     def __init__(
         self,
@@ -113,6 +112,8 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
                 self.datasets = [ds.inner_data_source_cache for ds in dataset.datasets]
             elif isinstance(dataset.datasets[0], DataSource):
                 self.datasets = dataset.datasets
+            elif isinstance(dataset.datasets[0], dict):
+                self.datasets = dataset.datasets
             if dataset.sampling_rates:
                 self.sampling_rates = dataset.sampling_rates
             if self.corpus_config is None:
@@ -134,6 +135,10 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
                 ]
             if self.sampling_rates and len(self.datasets) != len(self.sampling_rates):
                 raise ValueError("sampling_rates not with the same counts to datasets")
+            if dataset.source_type:
+                self.source_type = console_consts.TrainDatasetSourceType(
+                    dataset.source_type
+                )
         elif isinstance(dataset, list):
             if len(dataset) > 0:
                 if isinstance(dataset[0], str):
@@ -202,30 +207,40 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
         return result
 
     def get_action_result(self, **kwargs: Any) -> Dict[str, Any]:
-        result: Dict[str, Any] = {"sourceType": None}
+        result: Dict[str, Any] = {}
         versions: List[Dict[str, Any]] = []
         for i, dataset in enumerate(self.datasets):
-            sub_res = self.get_dataset_result(dataset, **kwargs)
-            if sub_res is None:
-                log_warn(f"invalid dataset {dataset}")
-                continue
-            if result.get("sourceType") and sub_res.get("sourceType") != result.get(
-                "sourceType"
-            ):
-                log_warn(
-                    "[load_dataset_action] dataset sourceType conflict, should all be"
-                    " with one source type"
-                    f"{sub_res}"
-                )
-            else:
-                result["sourceType"] = sub_res.get("sourceType")
-            version = sub_res.get("version", {})
+            if isinstance(dataset, Dict):
+                version = dataset
+            elif isinstance(dataset, DataSource):
+                sub_res = self.get_dataset_result(dataset, **kwargs)
+                if sub_res is None:
+                    log_warn(f"invalid dataset {dataset}")
+                    continue
+                if result.get("sourceType") and sub_res.get("sourceType") != result.get(
+                    "sourceType"
+                ):
+                    log_warn(
+                        "[load_dataset_action] dataset sourceType conflict, should all"
+                        f" be with one source type{sub_res}"
+                    )
+                else:
+                    self.source_type = sub_res.get("sourceType")
+                version = sub_res.get("version", {})
             if self.sampling_rates:
                 version["samplingRate"] = self.sampling_rates[i]
             if isinstance(version, dict):
                 versions.append(version)
 
         result["versions"] = versions
+        if self.source_type:
+            result["sourceType"] = self.source_type.value
+        else:
+            log_error(
+                "[load_dataset_action] dataset dict must be set with"
+                " DatasetConfig.source_type"
+            )
+            raise InvalidArgumentError("dataset dict must be set with source_type")
         return {"datasets": result}
 
     def get_dataset_result(
@@ -244,7 +259,7 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
                 raise InvalidArgumentError("dataset must be released")
             log_debug("[load_dataset_action] dataset loaded successfully")
             return {
-                "sourceType": console_consts.TrainDatasetSourceType.Platform.value,
+                "sourceType": console_consts.TrainDatasetSourceType.Platform,
                 "version": {
                     "versionId": qf_data_src.id,
                 },
@@ -252,9 +267,8 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
         elif isinstance(data_src, BosDataSource):
             log_debug("[load_dataset_action] prepare train-set in BOS")
             bos_data_src = cast(BosDataSource, data_src)
-            log_warn(f"hhh{bos_data_src.bucket}, {bos_data_src.bos_file_path}")
             return {
-                "sourceType": console_consts.TrainDatasetSourceType.PrivateBos.value,
+                "sourceType": console_consts.TrainDatasetSourceType.PrivateBos,
                 "version": {
                     "versionBosUri": bos_uploader.generate_bos_file_path(
                         bos_data_src.bucket, bos_data_src.bos_file_path
@@ -294,6 +308,11 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
                     ds_dict.get("versionBosUri")
                 )
                 res.append(bos_ds_src)
+            elif (
+                dataset_src_type
+                == console_consts.TrainDatasetSourceType.PrivateAfs.value
+            ):
+                continue
             else:
                 log_warn("[load_dataset_action] invalid dataset source: {ds_dict}")
         return res
@@ -322,20 +341,15 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
             "eval_split_ratio": self.eval_split_ratio,
         }
         if self.corpus_config:
-            meta["corpus_config"] = (
-                self.corpus_config.dict(by_alias=True, exclude_none=True),
+            meta["corpus_config"] = self.corpus_config.dict(
+                by_alias=True, exclude_none=True
             )
         return meta
 
     @classmethod
     def _load_from_dict(cls, meta: Dict[str, Any]) -> "LoadDataSetAction":
-        dataset = meta.get("ds_id") or meta.get("dataset_bos")
-        if dataset is not None:
-            action = cls(
-                id=meta.get("id"),
-                dataset=dataset,
-            )
-        elif meta.get("datasets") or meta.get("output"):
+        init_params: Dict[str, Any] = {}
+        if meta.get("datasets") or meta.get("output"):
             ds_dicts = meta.get("datasets")
             if ds_dicts is None:
                 ds_output = meta.get("output")
@@ -343,16 +357,22 @@ class LoadDataSetAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
                 ds_dicts = ds_output.get("datasets")
             assert isinstance(ds_dicts, dict)
             datasets = LoadDataSetAction.get_data_src_from_action_result(ds_dicts)
-            action = cls(
-                id=meta.get("id"),
-                dataset=DatasetConfig(
-                    datasets=datasets,
-                ),
-                corpus_config=CorpusConfig(),
-            )
+            corpus_config_meta = meta.get("corpus_config")
+            init_params["dataset"] = DatasetConfig(datasets=datasets)
+            if corpus_config_meta:
+                init_params["corpus_config"] = CorpusConfig.parse_obj(
+                    corpus_config_meta
+                )
+            if meta.get("id"):
+                init_params["id"] = meta.get("id")
+            if meta.get("eval_split_ratio"):
+                init_params["dataset"].eval_split_ratio = meta.get("eval_split_ratio")
         else:
             log_error(f"unknown load_dataset_action: {meta}")
             raise ValueError("unknown action meta")
+        action = cls(
+            **init_params,
+        )
         action.result = meta.get("output")
         return action
 
@@ -434,6 +454,8 @@ class TrainAction(
     """visualdl link"""
     log_link: Optional[str] = None
     """log link"""
+    extras: Dict[str, Any] = {}
+    """extra params which are not supported in the previous version"""
 
     def __init__(
         self,
@@ -456,11 +478,9 @@ class TrainAction(
                 train mode, e.g. `SFT`, `PostPretrain`, `DPO`. Defaults to None.
             train_type (Optional[str], optional):
                 train_type, must be specified when it's not increment training
-                like 'ERNIE-Bot-turbo-0725'
+                like 'ERNIE-Speed-8K'
             train_config (Optional[TrainConfig], optional):
                 train_config, e.g. `epoch=10, batch_size=32`.
-            base_model (Optional[str], optional):
-                base_mode, like 'ERNIE-Bot-turbo'. Defaults to None.
             task_id (Optional[int], optional):
                 used in incr train, model train task_id. Defaults to None.
             job_id (Optional[int], optional):
@@ -513,6 +533,7 @@ class TrainAction(
         self.job_name = self._generate_job_name(job_name, self.train_type)
         self.task_description = task_description
         self.job_description = job_description
+        self.extras = kwargs.get("train_extras", {})
 
     def _generate_job_name(
         self, job_name: Optional[str], train_type: Optional[str]
@@ -655,7 +676,8 @@ class TrainAction(
         assert self.train_config is not None
         hyper_params_dict = {
             **self.train_config.dict(
-                exclude={"peft_type", "trainset_rate", "extras", "resource_config"}
+                exclude={"peft_type", "trainset_rate", "extras", "resource_config"},
+                exclude_none=True,
             ),
             **self.train_config.extras,
         }
@@ -685,14 +707,20 @@ class TrainAction(
             kwargs["corpus_config"] = input.get("corpus_config")
         # 训练资源配置
         if self.train_config.resource_config:
-            kwargs["resource_config"] = self.train_config.resource_config.dict(
-                by_alias=True, exclude_none=True
-            )
+            kwargs["resource_config"] = {
+                **self.train_config.resource_config.dict(
+                    by_alias=True,
+                    exclude={"extras"},
+                    exclude_none=True,
+                ),
+                **self.train_config.resource_config.extras,
+            }
         create_task_resp = api.FineTune.V2.create_task(
             job_id=self.job_id,
             params_scale=self.train_config.peft_type,
             hyper_params=hyper_params_dict,
             dataset_config=ds_config,
+            **self.extras,
             **kwargs,
         )
         self.task_id = str(create_task_resp["result"]["taskId"])
@@ -716,7 +744,12 @@ class TrainAction(
         while True:
             task_status_resp = api.FineTune.V2.task_detail(
                 task_id=self.task_id,
-                **kwargs,
+                retry_count=kwargs.get(
+                    "retry_count", get_config().TRAINER_STATUS_POLLING_RETRY_TIMES
+                ),
+                backoff_factor=kwargs.get(
+                    "backoff_factor", get_config().TRAINER_STATUS_POLLING_BACKOFF_FACTOR
+                ),
             )
             task_status_result = task_status_resp.get("result", {})
             task_status = task_status_result.get("runStatus")
@@ -760,6 +793,11 @@ class TrainAction(
                 )
                 if job_progress >= 50:
                     log_info(f" check vdl report in {self.vdl_link}")
+                time.sleep(get_config().TRAIN_STATUS_POLLING_INTERVAL)
+            elif task_status == "":
+                time.sleep(get_config().TRAIN_STATUS_POLLING_INTERVAL)
+            elif task_status == console_consts.TrainStatus.Waiting:
+                log_info(f"[train_action] {self.job_id}/{self.task_id} queueing...")
                 time.sleep(get_config().TRAIN_STATUS_POLLING_INTERVAL)
             else:
                 raise InternalError(
@@ -826,18 +864,9 @@ class TrainAction(
         train_mode: console_consts.TrainMode,
         peft_type: Optional[PeftType] = None,
     ) -> TrainConfig:
-        if train_mode == console_consts.TrainMode.PostPretrain:
-            model_info = DefaultPostPretrainTrainConfigMapping.get(
-                model_type,
-            )
-        elif train_mode == console_consts.TrainMode.DPO:
-            model_info = DefaultDPOTrainConfigMapping.get(
-                model_type,
-            )
-        else:
-            model_info = DefaultTrainConfigMapping.get(
-                model_type,
-            )
+        model_info = get_default_train_config(train_mode).get(
+            model_type,
+        )
         if model_info is None or len(model_info) == 0:
             raise InvalidArgumentError(f"can not find default config for {model_type}")
         if peft_type is None:
@@ -996,7 +1025,7 @@ class ModelPublishAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
             },
         }
         if self.model:
-            meta["model_version_id"] = self.model.id
+            meta["model_id"] = self.model.id
         if self.result:
             res = copy.deepcopy(self.result)
             if "model" in res:
@@ -1014,7 +1043,7 @@ class ModelPublishAction(BaseAction[Dict[str, Any], Dict[str, Any]]):
         )
         action._input = meta.get("input")  # type: ignore
         action.result = meta.get("output")
-        action.model = Model(version_id=meta.get("model_version_id"))
+        action.model = Model(id=meta.get("model_id") or meta.get("model_version_id"))
         action.model.auto_complete_info()
         return action
 

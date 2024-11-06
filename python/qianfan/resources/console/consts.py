@@ -140,10 +140,12 @@ class TrainStatus(str, Enum):
     """训练完成"""
     Running = "Running"
     """训练进行中"""
-    Fail = "Fail"
+    Fail = "Failed"
     """训练失败"""
     Stop = "Stopped"
     """训练停止"""
+    Waiting = "Waiting"
+    """排队中"""
 
 
 class ModelState(str, Enum):
@@ -165,6 +167,7 @@ class TrainDatasetType(int, Enum):
 class TrainDatasetSourceType(str, Enum):
     Platform = "Platform"
     PrivateBos = "Bos"
+    PrivateAfs = "Afs"
 
 
 class TrainMode(str, Enum):
@@ -174,6 +177,8 @@ class TrainMode(str, Enum):
     """PostPretrain """
     DPO = "DPO"
     """DPO"""
+    KTO = "KTO"
+    """KTO"""
 
 
 class TrainParameterScale(str, Enum):
@@ -284,6 +289,8 @@ class FinetuneSupportModelType(str, Enum):
     """Text2Text Model"""
     Text2Image: str = "text2image"
     """Text2Image Model"""
+    ImageUnderstanding: str = "imageUnderstanding"
+    """Image Understanding Model"""
 
 
 class FinetuneSupportHyperParameterType(str, Enum):
@@ -389,3 +396,19 @@ class ModelCompTaskStatus(str, Enum):
     """终止中"""
     Stopped: str = "stopped"
     """已终止"""
+
+
+class V2:
+    class DatasetFormat(str, Enum):
+        PromptResponse: str = "PromptResponse"
+        Text: str = "Text"
+        DPOPromptChosenRejected: str = "DPO_PromptChosenRejected"
+        KTOPromptChosenRejected: str = "KTO_PromptChosenRejected"
+        PromptSortedResponses: str = "PromptSortedresponses"
+        Prompt: str = "Prompt"
+        PromptImage: str = "PromptImage"
+        PromptImageResponse: str = "PromptImageResponse"
+
+    class StorageType(str, Enum):
+        Bos: str = "BOS"
+        SysStorage: str = "sysStorage"

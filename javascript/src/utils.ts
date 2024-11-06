@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {BASE_PATH, DEFAULT_CONFIG} from './constant';
-import {IAMConfig, QfLLMInfoMap, ReqBody} from './interface';
+import HttpClient from './HttpClient';
+import Fetch from './Fetch';
+import {Headers} from './Fetch/nodeFetch';
+import {BASE_PATH, DEFAULT_CONFIG, DEFAULT_HEADERS} from './constant';
+import {IAMConfig, QfLLMInfoMap, ReqBody, DefaultConfig} from './interface';
 import * as packageJson from '../package.json';
 
 /**
@@ -62,7 +65,7 @@ export function getIAMConfig(ak: string, sk: string, baseUrl: string): IAMConfig
  */
 export function getRequestBody(body: ReqBody, model, version: string): string {
     const request_source
-        = (getCurrentEnvironment() === 'browser') ? `qianfan_fe_sdk_v${version}` : `qianfan_js_sdk_v${version}`;
+        = getCurrentEnvironment() === 'browser' ? `qianfan_fe_sdk_v${version}` : `qianfan_js_sdk_v${version}`;
 
     const modifiedBody = {
         ...body,
@@ -74,7 +77,6 @@ export function getRequestBody(body: ReqBody, model, version: string): string {
     };
     return JSON.stringify(modifiedBody);
 }
-
 
 /**
  * 获取模型对应的API端点
@@ -104,12 +106,12 @@ export const getPath = ({
     endpoint = '',
     type,
 }: {
-    model?: string,
-    modelInfoMap?: QfLLMInfoMap,
-    Authentication: 'IAM' | 'AK', // 假设 Authentication 只能是 'IAM' 或 'AK'
-    api_base: string,
-    endpoint?: string,
-    type?: string,
+    model?: string;
+    modelInfoMap?: QfLLMInfoMap;
+    Authentication: 'IAM' | 'AK'; // 假设 Authentication 只能是 'IAM' 或 'AK'
+    api_base: string;
+    endpoint?: string;
+    type?: string;
 }): string => {
     if (endpoint && type) {
         const basePath = Authentication === 'IAM' ? BASE_PATH : api_base;
@@ -118,12 +120,9 @@ export const getPath = ({
     }
     else if (model && modelInfoMap && modelInfoMap[model]) {
         const modelEndpoint = getModelEndpoint(model, modelInfoMap);
-        return Authentication === 'IAM'
-            ? `${BASE_PATH}${modelEndpoint}`
-            : `${api_base}${modelEndpoint}`;
+        return Authentication === 'IAM' ? `${BASE_PATH}${modelEndpoint}` : `${api_base}${modelEndpoint}`;
     }
 };
-
 
 export const castToError = (err: any): Error => {
     if (err instanceof Error) {
@@ -142,7 +141,7 @@ export function readEnvVariable(key: string) {
  *
  * @returns 返回一个字符串类型的键值对对象，包含环境变量
  */
-export function getDefaultConfig(): Record<string, string> {
+export function getDefaultConfig(): DefaultConfig {
     const envVariables = Object.keys(DEFAULT_CONFIG);
     if (getCurrentEnvironment() === 'browser') {
         return {...DEFAULT_CONFIG};
@@ -181,12 +180,12 @@ export function getPathAndBody({
     endpoint = '',
     type,
 }: {
-    model?: string,
-    modelInfoMap?: QfLLMInfoMap,
-    baseUrl: string,
-    body?: ReqBody,
-    endpoint?: string,
-    type?: string
+    model?: string;
+    modelInfoMap?: QfLLMInfoMap;
+    baseUrl: string;
+    body?: ReqBody;
+    endpoint?: string;
+    type?: string;
 }): {
     AKPath: string;
     requestBody: string;
@@ -285,3 +284,140 @@ export function parseHeaders(headers): {[key: string]: string} {
     });
     return headerObj;
 }
+
+interface Variables {
+    [key: string]: any;
+}
+
+/**
+ * 设置浏览器变量
+ *
+ * @param variables 要设置的变量对象，其中每个属性名对应一个变量名，属性值对应变量的值
+ * @returns 无返回值
+ */
+export function setBrowserVariable(variables: Variables): void {
+    Object.entries(variables).forEach(([key, value]) => {
+        DEFAULT_CONFIG[key] = value;
+    });
+}
+
+function baseActionUrl(route: string, action: string): string {
+    return !action ? route : `${route}?Action=${action}`;
+}
+
+interface ConsoleActionParams {
+    base_api_route: string;
+    data?: Record<string, any>;
+    action?: string;
+}
+
+/**
+ * consoleApi 开放入口
+ *
+ * @param base_api_route 基础API路由，类型为字符串
+ * @param body 查询参数，类型为任意类型
+ * @param action 可选参数，方法名称，类型为字符串
+ * @returns 返回任意类型
+ */
+export async function consoleAction({base_api_route, data, action}: ConsoleActionParams): Promise<any> {
+    const config = getDefaultConfig();
+    // IAM鉴权，先判断是否有IAM的key
+    if (!(config.QIANFAN_ACCESS_KEY && config.QIANFAN_SECRET_KEY)) {
+        throw new Error('请设置QIANFAN_ACCESS_KEY/QIANFAN_SECRET_KEY');
+    }
+    // 鉴权
+    const httpClientConfig = getIAMConfig(
+        config.QIANFAN_ACCESS_KEY,
+        config.QIANFAN_SECRET_KEY,
+        config.QIANFAN_CONSOLE_API_BASE_URL
+    );
+    const client = new HttpClient(httpClientConfig);
+
+    const normalizedRoute = base_api_route.startsWith('/') ? base_api_route.slice(1) : base_api_route;
+    const apiRoute = `${config.QIANFAN_CONSOLE_API_BASE_URL}/${normalizedRoute}`;
+
+    const baseParams = {
+        httpMethod: 'POST',
+        path: apiRoute,
+        body: data && JSON.stringify(data),
+        headers: {
+            ...DEFAULT_HEADERS,
+        },
+    };
+    const fetchOptions = await client.getSignature(
+        action ? Object.assign({}, baseParams, {params: {Action: action}}) : baseParams
+    );
+    const fetchInstance = new Fetch();
+    try {
+        const {url, ...rest} = fetchOptions;
+        const resp = await fetchInstance.makeRequest(baseActionUrl(url, action), rest);
+        return resp;
+    }
+    catch (error) {
+        throw error;
+    }
+}
+
+interface GetTokenProps {
+    expireInSeconds?: number;
+}
+
+interface TokenResp {
+    headers?: Headers,
+    userId?: string,
+    status?: string,
+    createTime?: string,
+    token: string,
+    expireTime: string
+}
+
+async function fetchBearToken(props?: GetTokenProps): Promise<TokenResp> {
+    const {expireInSeconds: expireInSecondsInProps} = props || {};
+    const config = getDefaultConfig();
+    const {QIANFAN_BEAR_TOKEN_URL} = config;
+    try {
+        // 鉴权
+        const httpClientConfig = getIAMConfig(
+            config.QIANFAN_ACCESS_KEY,
+            config.QIANFAN_SECRET_KEY,
+            QIANFAN_BEAR_TOKEN_URL
+        );
+        const client = new HttpClient(httpClientConfig);
+        const expireInSeconds = typeof expireInSecondsInProps === 'number' ? expireInSecondsInProps : 100000
+        const fetchOptions = await client.getSignature({
+            httpMethod: 'GET',
+            path: QIANFAN_BEAR_TOKEN_URL,
+            params: {expireInSeconds},
+            headers: {
+                ...DEFAULT_HEADERS,
+            }
+        });
+        const fetchInstance = new Fetch();
+        const {url, ...rest} = fetchOptions;
+        const resp = await fetchInstance.makeRequest(`${QIANFAN_BEAR_TOKEN_URL}?expireInSeconds=${expireInSeconds}`, rest);
+        return resp;
+    }
+    catch (error) {
+        const error_msg = `Failed to get access token: ${error && error.message}`;
+        throw new Error(error_msg);
+    }
+}
+
+function _getBearToken() {
+    let expire_time: string | number = 0, data;
+    return async function getToken(props?: GetTokenProps): Promise<TokenResp> {
+        try{
+            if(!expire_time || new Date(expire_time) <= new Date()){
+                const resp = await fetchBearToken(props);
+                const {expireTime} = resp || {};
+                expire_time = expireTime;
+                data = resp;
+            }
+            return data;
+        } catch(error) {
+            throw new Error(error?.message);
+        }
+    }
+}
+
+export const getBearToken: (props?: GetTokenProps) => Promise<TokenResp> = _getBearToken();

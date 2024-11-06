@@ -121,7 +121,7 @@ func (c *Text2Image) do(ctx context.Context, request *Text2ImageRequest) (*Text2
 		if err != nil {
 			return nil, err
 		}
-		req, err := newModelRequest("POST", url, request)
+		req, err := NewModelRequest("POST", url, request)
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +155,7 @@ func (c *Text2Image) ModelList() []string {
 	models := getModelEndpointRetriever().GetModelList(context.TODO(), "text2image")
 	list := make([]string, len(models))
 	i := 0
-	for k := range Text2ImageEndpoint {
+	for k := range models {
 		list[i] = k
 		i++
 	}
